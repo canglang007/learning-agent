@@ -1,0 +1,1 @@
+"""Independent learning-first agent."""
