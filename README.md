@@ -23,7 +23,7 @@ uv run uvicorn learning_agent.app:create_app --factory --host 127.0.0.1 --port 8
 
 访问 <http://127.0.0.1:8320>。上传资料、创建会话、提出困惑，再追问“这一步不懂”或“换个例子”。不需要独立数据库或 GPU 服务器。
 
-示例配置使用用户指定的第三方网关 `https://surplustoken.com/v1` 和模型 ID `gpt-6.1-sol`，不代表官方服务，也不代表已经实测。默认协议为 `chat_completions`；网关确认支持 Responses 时可切换 `LA_PROTOCOL=responses`。仅有 `/v1` 地址不足以证明兼容工具调用或视觉输入。
+示例配置使用用户指定的第三方网关 `https://surplustoken.com/v1` 和模型 ID `gpt-6.1-sol`，不代表官方服务。已通过一次文字主线真实调用：通用解释不使用工具，资料问题调用目录与原文工具，连续追问利用上下文换讲法。该结果不代表所有模型/协议/模态都可用。默认协议为 `chat_completions`；网关确认支持 Responses 时可切换 `LA_PROTOCOL=responses`。视觉能力尚未验证。
 
 对话和按需读取的资料片段会发送给配置的服务；密钥只在本地环境使用。原始资料与 SQLite 存在 `data/`，不进入代码仓库。初版按单进程运行；正在回答时勿重启服务，崩溃后的运行恢复后续实现。
 
@@ -38,3 +38,13 @@ uv run uvicorn learning_agent.app:create_app --factory --host 127.0.0.1 --port 8
 ```bash
 uv run pytest -q
 ```
+
+## 可重复的真实文字验收
+
+配置密钥后可显式运行（会产生模型费用）：
+
+```bash
+uv run python examples/evaluate_text.py
+```
+
+脚本通过项目 API 依次执行通用解释、查阅人工编写的验收笔记、根据反馈换讲法。保存回答、工具观察、usage 和延迟到 `data/evaluations/`，不保存密钥。它验证真实调用与初步行为，不替代真实课程资料或大规模教学质量评测。协议或网络失败时不会标记为成功。项目包含 SOCKS 支持，使用本机代理配置。

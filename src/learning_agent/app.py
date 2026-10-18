@@ -48,7 +48,7 @@ def create_app(settings=None, provider=None):
             "vision": False,
             "video": False,
             "retrieval": "lexical_baseline",
-            "model_verified": False,
+            "verification": "inspect_actual_run_results",
         }
 
     @app.get("/api/spaces")
