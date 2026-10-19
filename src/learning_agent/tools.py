@@ -352,3 +352,8 @@ class MaterialTools:
             return {"error": "render_failed", "detail": str(error)}
         except MediaError as error:
             return {"error": "media_failed", "detail": str(error)}
+        except OSError:
+            return {
+                "error": "asset_unavailable",
+                "detail": "资料或图像产物不可用，请核对资料或重建产物。",
+            }

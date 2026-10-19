@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +16,15 @@ class Settings(BaseSettings):
     max_steps: int = Field(default=8, ge=1, le=20)
     enable_vision: bool = True
     max_images_per_turn: int = Field(default=3, ge=1, le=6)
+    context_budget_tokens: int = Field(default=65536, ge=1024)
+    context_output_reserve_tokens: int = Field(default=4096, ge=1)
+    context_headroom_tokens: int = Field(default=4096, ge=0)
+    max_context_images: int | None = Field(default=None, ge=1, le=6)
+    context_image_allowance: int = Field(default=4096, ge=1)
+    context_max_request_bytes: int = Field(default=64 * 1024**2, ge=1024)
+    output_token_field: Literal[
+        "none", "max_tokens", "max_completion_tokens", "max_output_tokens"
+    ] = "none"
     asr_provider: Literal["disabled", "local", "compatible"] = "disabled"
     asr_model: str = "base"
     asr_base_url: str = "https://api.openai.com/v1"
@@ -31,3 +40,19 @@ class Settings(BaseSettings):
     embedding_model: str = "bge-m3:latest"
     embedding_api_key: SecretStr = SecretStr("")
     embedding_timeout_seconds: float = Field(default=30, gt=0, le=180)
+
+    @model_validator(mode="after")
+    def context_limits(self):
+        if self.context_budget_tokens <= (
+            self.context_output_reserve_tokens + self.context_headroom_tokens
+        ):
+            raise ValueError("上下文总预算必须大于输出预留与误差余量之和")
+        if self.max_context_images is None:
+            self.max_context_images = self.max_images_per_turn
+        if self.max_context_images < self.max_images_per_turn:
+            raise ValueError("上下文图片上限不能小于本轮图片上限")
+        if self.output_token_field != "none" and (
+            (self.protocol == "responses") != (self.output_token_field == "max_output_tokens")
+        ):
+            raise ValueError("输出限制字段与所选协议不匹配")
+        return self

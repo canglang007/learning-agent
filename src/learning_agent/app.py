@@ -336,6 +336,14 @@ def create_app(settings=None, provider=None):
         result = store.run(run_id)
         answer, events = store.reference_context(run_id)
         space_id = store.get_conversation(result["conversation_id"])["space_id"]
-        return {**result, "references": resolve_references(answer, events, space_id)}
+        return {
+            **result,
+            "references": resolve_references(answer, events, space_id),
+            "context": store.run_context(run_id),
+        }
+
+    @app.get("/api/runs/{run_id}/context")
+    async def run_context(run_id: str):
+        return store.run_context(run_id)
 
     return app

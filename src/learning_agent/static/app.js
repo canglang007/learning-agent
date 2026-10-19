@@ -87,6 +87,10 @@ async function loadChat() {
       api(`/runs/${m.run_id}`).then(r=>{
         if(selectedConversation!==conversation)return;
         linkReferences(body,r.references||[]);
+        if((r.context||[]).some(step=>step.omissions?.length)) {
+          const hint=document.createElement('p');hint.textContent='本次仅使用部分历史或图像。原记录仍保留；需要早期内容时，请指定回答或资料位置。';
+          article.insertBefore(hint,details);
+        }
         if(['completed','budget_exhausted'].includes(r.state))addFeedbackActions(article,m.run_id,body);
         details.querySelector('pre').textContent=JSON.stringify(r,null,2);const seen=new Set();
         for(const event of r.events) {

@@ -2,6 +2,7 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -60,6 +61,16 @@ class Store:
                 CREATE TABLE IF NOT EXISTS learning_notes (
                     seq INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL,
                     run_id TEXT NOT NULL, note TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS protocol_turns (
+                    conversation_id TEXT NOT NULL, turn_seq INTEGER NOT NULL,
+                    run_id TEXT UNIQUE, schema_version INTEGER NOT NULL,
+                    profile TEXT NOT NULL, raw_input TEXT NOT NULL, groups_json TEXT NOT NULL,
+                    replay_status TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(conversation_id,turn_seq));
+                CREATE TABLE IF NOT EXISTS context_snapshots (
+                    run_id TEXT NOT NULL, step INTEGER NOT NULL,
+                    snapshot TEXT NOT NULL, result TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL, PRIMARY KEY(run_id,step));
             """)
             db.execute("BEGIN IMMEDIATE")
             columns = {row[1] for row in db.execute("PRAGMA table_info(materials)")}
@@ -478,7 +489,9 @@ class Store:
         with self.connect() as db:
             db.execute("UPDATE runs SET events=? WHERE id=?", (json.dumps(events), run_id))
 
-    def finish_run(self, run_id, state, content, protocol, error=None, learning_notes=()):
+    def finish_run(
+        self, run_id, state, content, protocol, error=None, learning_notes=(), *, archive=None
+    ):
         with self.connect() as db:
             row = db.execute("SELECT conversation_id FROM runs WHERE id=?", (run_id,)).fetchone()
             db.execute("UPDATE runs SET state=?,error=? WHERE id=?", (state, error, run_id))
@@ -490,6 +503,24 @@ class Store:
                 "UPDATE conversations SET protocol=? WHERE id=?",
                 (json.dumps(protocol), row["conversation_id"]),
             )
+            if archive is not None:
+                seq = db.execute(
+                    "SELECT COALESCE(MAX(turn_seq),0)+1 FROM protocol_turns WHERE conversation_id=?",
+                    (row["conversation_id"],),
+                ).fetchone()[0]
+                db.execute(
+                    "INSERT INTO protocol_turns VALUES (?,?,?,1,?,?,?,?,?)",
+                    (
+                        row["conversation_id"],
+                        seq,
+                        run_id,
+                        json.dumps(archive["profile"]),
+                        json.dumps({**archive["input"], "answer": content}),
+                        json.dumps(archive["groups"]),
+                        "failed" if state == "failed" else "ready",
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
             if state in {"completed", "budget_exhausted"}:
                 db.executemany(
                     "INSERT INTO learning_notes(conversation_id,run_id,note) VALUES (?,?,?)",
@@ -530,9 +561,112 @@ class Store:
             raise FeedbackError("反馈所指的讲解不在当前会话")
         return {
             "run_id": target_run_id,
-            "answer": row["content"][:8000],
-            "truncated": len(row["content"]) > 8000,
+            "answer": row["content"],
+            "truncated": False,
         }
+
+    def context_turns(self, conversation_id):
+        """Idempotently retain the unsplittable legacy protocol; don't infer turn roles."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            conv = db.execute(
+                "SELECT protocol FROM conversations WHERE id=?", (conversation_id,)
+            ).fetchone()
+            if conv is None:
+                raise LookupError("会话不存在")
+            if not db.execute(
+                "SELECT 1 FROM protocol_turns WHERE conversation_id=? AND turn_seq=0",
+                (conversation_id,),
+            ).fetchone():
+                visible = [
+                    dict(m)
+                    for m in db.execute(
+                        "SELECT m.role,m.content FROM messages m LEFT JOIN runs r ON r.id=m.run_id "
+                        "WHERE m.conversation_id=? AND m.role IN ('user','assistant') "
+                        "AND (m.run_id IS NULL OR r.state!='running') ORDER BY m.seq",
+                        (conversation_id,),
+                    )
+                ]
+                db.execute(
+                    "INSERT INTO protocol_turns VALUES (?,0,NULL,1,'{}',?,?,'legacy',?)",
+                    (
+                        conversation_id,
+                        json.dumps({"visible": visible}),
+                        json.dumps(
+                            [{"id": "legacy", "kind": "legacy", "messages": json.loads(conv[0])}]
+                        ),
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+            rows = db.execute(
+                "SELECT * FROM protocol_turns WHERE conversation_id=? ORDER BY turn_seq",
+                (conversation_id,),
+            ).fetchall()
+        turns = []
+        for row in rows:
+            raw = json.loads(row["raw_input"])
+            groups = json.loads(row["groups_json"])
+            if row["turn_seq"] == 0:
+                if not raw["visible"]:
+                    continue
+                visible = raw["visible"]
+            else:
+                visible = [
+                    {"role": "user", "content": raw["question"]},
+                    {
+                        "role": "assistant",
+                        "content": raw["answer"]
+                        if row["replay_status"] == "ready"
+                        else "[上一轮执行失败，未完成讲解：" + raw["answer"] + "]",
+                    },
+                ]
+            turns.append(
+                {
+                    "turn_seq": row["turn_seq"],
+                    "profile": json.loads(row["profile"]),
+                    "groups": groups,
+                    "replay_status": row["replay_status"],
+                    "visible": visible,
+                    "delivered_answer": raw.get("answer")
+                    if groups and groups[-1]["kind"] == "tools" and row["replay_status"] == "ready"
+                    else None,
+                }
+            )
+        return turns
+
+    def save_context(self, run_id, step, snapshot):
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO context_snapshots VALUES (?,?,?,'{}',?)",
+                (run_id, step, json.dumps(snapshot), datetime.now(UTC).isoformat()),
+            )
+
+    def context_result(self, run_id, step, result):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            prior = db.execute(
+                "SELECT result FROM context_snapshots WHERE run_id=? AND step=?", (run_id, step)
+            ).fetchone()
+            merged = {**(json.loads(prior[0]) if prior else {}), **result}
+            db.execute(
+                "UPDATE context_snapshots SET result=? WHERE run_id=? AND step=?",
+                (json.dumps(merged), run_id, step),
+            )
+
+    def run_context(self, run_id):
+        self.run(run_id)
+        with self.connect() as db:
+            return [
+                {
+                    "step": r["step"],
+                    "created_at": r["created_at"],
+                    **json.loads(r["snapshot"]),
+                    "result": json.loads(r["result"]),
+                }
+                for r in db.execute(
+                    "SELECT * FROM context_snapshots WHERE run_id=? ORDER BY step", (run_id,)
+                )
+            ]
 
     def run(self, run_id):
         with self.connect() as db:
