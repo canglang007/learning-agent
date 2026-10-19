@@ -30,6 +30,15 @@ class Store:
                     material_id TEXT NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL,
                     width REAL NOT NULL, height REAL NOT NULL,
                     PRIMARY KEY(material_id, page));
+                CREATE TABLE IF NOT EXISTS media (
+                    material_id TEXT PRIMARY KEY, metadata TEXT NOT NULL,
+                    state TEXT NOT NULL, error TEXT,
+                    transcript_state TEXT NOT NULL DEFAULT 'missing',
+                    transcript_source TEXT, transcript_error TEXT);
+                CREATE TABLE IF NOT EXISTS transcript_segments (
+                    material_id TEXT NOT NULL, seq INTEGER NOT NULL,
+                    start REAL NOT NULL, end REAL NOT NULL, text TEXT NOT NULL,
+                    PRIMARY KEY(material_id,seq));
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(materials)")}
             if "format" not in columns:
@@ -149,7 +158,7 @@ class Store:
             return [
                 dict(row)
                 for row in db.execute(
-                    "SELECT m.id,m.name,m.format,(SELECT count(*) FROM material_pages p WHERE p.material_id=m.id) AS page_count FROM materials m WHERE m.space_id=? ORDER BY rowid",
+                    "SELECT m.id,m.name,m.format,(SELECT count(*) FROM material_pages p WHERE p.material_id=m.id) AS page_count,media.state AS media_state,media.transcript_state FROM materials m LEFT JOIN media ON media.material_id=m.id WHERE m.space_id=? ORDER BY m.rowid",
                     (space_id,),
                 )
             ]
@@ -162,6 +171,192 @@ class Store:
         if row is None:
             raise LookupError("该空间内没有此资料")
         return dict(row)
+
+    def add_media(self, space_id, name, raw, suffix):
+        from learning_agent.media import probe
+
+        self.require_space(space_id)
+        material_id = str(uuid4())
+        directory = self.root / "materials" / material_id
+        directory.mkdir()
+        source = directory / ("original" + suffix)
+        source.write_bytes(raw)
+        try:
+            metadata = probe(source)
+        except Exception:
+            source.unlink(missing_ok=True)
+            directory.rmdir()
+            raise
+        metadata["original_path"] = str(source.relative_to(self.root))
+        metadata["preview_path"] = str((directory / "preview.mp4").relative_to(self.root))
+        metadata["frame_index_seconds"] = (
+            [
+                round(
+                    i * metadata["duration"] / max(1, min(60, int(metadata["duration"] / 30) + 1)),
+                    3,
+                )
+                for i in range(max(1, min(60, int(metadata["duration"] / 30) + 1)))
+            ]
+            if metadata["has_video"]
+            else []
+        )
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO materials(id,space_id,name,text,format) VALUES (?,?,?,'',?)",
+                (material_id, space_id, name, "video" if metadata["has_video"] else "audio"),
+            )
+            db.execute(
+                "INSERT INTO media(material_id,metadata,state) VALUES (?,?,'processing')",
+                (material_id, json.dumps(metadata)),
+            )
+        return self.media(space_id, material_id)
+
+    def recover_media(self):
+        # Local background work is not a persistent queue. Recover visibly, offer retry.
+        with self.connect() as db:
+            db.execute(
+                "UPDATE media SET state='failed',error='服务中断，请重试准备' WHERE state='processing'"
+            )
+            db.execute(
+                "UPDATE media SET transcript_state='failed',transcript_error='服务中断，请重试转写' WHERE transcript_state='running'"
+            )
+
+    def media(self, space_id, material_id):
+        material = self.material(space_id, material_id)
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM media WHERE material_id=?", (material_id,)).fetchone()
+            count = db.execute(
+                "SELECT count(*) FROM transcript_segments WHERE material_id=?", (material_id,)
+            ).fetchone()[0]
+        if row is None:
+            raise LookupError("此资料不是音视频")
+        result = dict(row)
+        metadata = json.loads(result.pop("metadata"))
+        return {
+            **result,
+            **metadata,
+            "name": material["name"],
+            "format": material["format"],
+            "segment_count": count,
+            "playback_url": f"/api/spaces/{space_id}/materials/{material_id}/playback",
+        }
+
+    def prepare_media(self, space_id, material_id):
+        from learning_agent.media import MediaError, prepare
+
+        info = self.media(space_id, material_id)
+        try:
+            prepare(self.root / info["original_path"], self.root / info["preview_path"], info)
+            state, error = "ready", None
+        except MediaError as exception:
+            state, error = "failed", str(exception)
+        with self.connect() as db:
+            db.execute(
+                "UPDATE media SET state=?,error=? WHERE material_id=?", (state, error, material_id)
+            )
+
+    def claim_media_job(self, space_id, material_id, transcription=False):
+        from learning_agent.media import MediaError
+
+        info = self.media(space_id, material_id)
+        if transcription and not info["has_audio"]:
+            raise MediaError("该视频没有音轨，可查看画面或上传已有字幕")
+        column = "transcript_state" if transcription else "state"
+        running = "running" if transcription else "processing"
+        with self.connect() as db:
+            changed = db.execute(
+                f"UPDATE media SET {column}=? WHERE material_id=? AND {column}!=?",
+                (running, material_id, running),
+            ).rowcount
+        return bool(changed)
+
+    def segments(self, space_id, material_id):
+        self.media(space_id, material_id)
+        with self.connect() as db:
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT start,end,text FROM transcript_segments WHERE material_id=? ORDER BY seq",
+                    (material_id,),
+                )
+            ]
+
+    def save_segments(
+        self, space_id, material_id, segments, source, from_job=False, alignment_notes=None
+    ):
+        from learning_agent.media import MediaError, valid_segments
+
+        info = self.media(space_id, material_id)
+        segments = valid_segments(segments, info["duration"])
+        with self.connect() as db:
+            state = db.execute(
+                "SELECT transcript_state FROM media WHERE material_id=?", (material_id,)
+            ).fetchone()[0]
+            if state == "running" and not from_job:
+                raise MediaError("正在转写，请等待结束后再上传字幕，避免相互覆盖")
+            db.execute("DELETE FROM transcript_segments WHERE material_id=?", (material_id,))
+            db.executemany(
+                "INSERT INTO transcript_segments VALUES (?,?,?,?,?)",
+                [(material_id, i, s["start"], s["end"], s["text"]) for i, s in enumerate(segments)],
+            )
+            db.execute(
+                "UPDATE media SET transcript_state='ready',transcript_source=?,transcript_error=NULL WHERE material_id=?",
+                (source, material_id),
+            )
+
+            metadata = json.loads(
+                db.execute(
+                    "SELECT metadata FROM media WHERE material_id=?", (material_id,)
+                ).fetchone()[0]
+            )
+            metadata["alignment_notes"] = alignment_notes or []
+            db.execute(
+                "UPDATE media SET metadata=? WHERE material_id=?",
+                (json.dumps(metadata), material_id),
+            )
+
+    def transcribe_media(self, space_id, material_id, settings):
+        from learning_agent.media import MediaError, transcribe
+
+        info = self.media(space_id, material_id)
+        try:
+            result = transcribe(self.root / info["original_path"], info["duration"], settings)
+            self.save_segments(
+                space_id,
+                material_id,
+                result["segments"],
+                f"asr:{settings.asr_provider}:{settings.asr_model}",
+                from_job=True,
+                alignment_notes=result["alignment_notes"],
+            )
+        except MediaError as error:
+            with self.connect() as db:
+                db.execute(
+                    "UPDATE media SET transcript_state='failed',transcript_error=? WHERE material_id=?",
+                    (str(error), material_id),
+                )
+
+    def media_frame(self, space_id, material_id, seconds):
+        from PIL import Image
+
+        from learning_agent.media import MediaError, frame
+
+        info = self.media(space_id, material_id)
+        if not info["has_video"] or not 0 <= seconds < info["duration"]:
+            raise MediaError("时间点超出视频范围或资料没有画面")
+        asset = Path("materials") / material_id / f"frame-{seconds:.3f}.png"
+        output = self.root / asset
+        if not output.exists():
+            frame(self.root / info["original_path"], output, seconds)
+        with Image.open(output) as image:
+            width, height = image.size
+        return {
+            "asset_path": str(asset),
+            "mime_type": "image/png",
+            "width": width,
+            "height": height,
+            "seconds": seconds,
+        }
 
     def conversation(self, space_id):
         self.require_space(space_id)

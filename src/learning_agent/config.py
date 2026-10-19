@@ -16,3 +16,7 @@ class Settings(BaseSettings):
     max_steps: int = Field(default=8, ge=1, le=20)
     enable_vision: bool = True
     max_images_per_turn: int = Field(default=3, ge=1, le=6)
+    asr_provider: Literal["disabled", "local", "compatible"] = "disabled"
+    asr_model: str = "base"
+    asr_base_url: str = "https://api.openai.com/v1"
+    asr_api_key: SecretStr = SecretStr("")

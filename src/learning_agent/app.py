@@ -2,12 +2,14 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, Field, field_validator
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from learning_agent.agent import run_turn
 from learning_agent.config import Settings
+from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
 from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
 from learning_agent.store import Store
@@ -26,7 +28,22 @@ class Text(BaseModel):
 
 class Focus(BaseModel):
     material_id: str
-    page: int = Field(ge=1, le=200)
+    page: int | None = Field(default=None, ge=1, le=200)
+    start_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    end_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def position(self):
+        if self.page is not None:
+            if self.start_seconds is not None or self.end_seconds is not None:
+                raise ValueError("请选择页码或媒体片段之一")
+        elif (
+            self.start_seconds is None
+            or self.end_seconds is None
+            or not 0 < self.end_seconds - self.start_seconds <= 120
+        ):
+            raise ValueError("媒体片段需要顺序正确的起止时间，最多120秒")
+        return self
 
 
 class Question(Text):
@@ -36,8 +53,16 @@ class Question(Text):
 def create_app(settings=None, provider=None):
     settings = settings or Settings()
     store = Store(settings.data_root)
+    store.recover_media()
     model = provider or OpenAIProvider(settings)
-    app = FastAPI(title="Learning Agent · 资料与页面讲解")
+    app = FastAPI(title="Learning Agent · 多模态学习讲解")
+    app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
+
+    @app.exception_handler(MediaError)
+    async def media_error(request, error):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse({"detail": str(error)}, status_code=422)
 
     @app.exception_handler(LookupError)
     async def missing(request, error):
@@ -55,9 +80,10 @@ def create_app(settings=None, provider=None):
             "model": settings.model,
             "protocol": settings.protocol,
             "configured": bool(settings.api_key.get_secret_value()) or provider is not None,
-            "materials": ["txt", "md", "pdf"],
+            "materials": ["txt", "md", "pdf", "audio", "video"],
             "vision": settings.enable_vision,
-            "video": False,
+            "video": True,
+            "asr_provider": settings.asr_provider,
             "retrieval": "lexical_baseline",
             "verification": "inspect_actual_run_results",
         }
@@ -77,14 +103,29 @@ def create_app(settings=None, provider=None):
         return store.materials(space_id)
 
     @app.post("/api/spaces/{space_id}/materials", status_code=201)
-    async def upload(space_id: str, file: UploadFile):
+    async def upload(
+        space_id: str, file: UploadFile, background_tasks: BackgroundTasks, response: Response
+    ):
         suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in {".txt", ".md", ".pdf"}:
-            raise HTTPException(422, "支持 UTF-8 TXT/Markdown 和 PDF。影音工具后续加入。")
-        limit = 20_000_000 if suffix == ".pdf" else 2_000_000
+        if suffix not in {".txt", ".md", ".pdf"} | MEDIA_SUFFIXES:
+            raise HTTPException(422, "支持文字、PDF、常用音频/视频格式")
+        limit = (
+            100_000_000
+            if suffix in MEDIA_SUFFIXES
+            else 20_000_000
+            if suffix == ".pdf"
+            else 2_000_000
+        )
         raw = await file.read(limit + 1)
         if len(raw) > limit:
-            raise HTTPException(413, "PDF限制20 MB，文字资料限制2 MB")
+            raise HTTPException(413, "音视频限制100 MB，PDF限制20 MB，文字资料限制2 MB")
+        if suffix in MEDIA_SUFFIXES:
+            item = await asyncio.to_thread(
+                store.add_media, space_id, (file.filename or "media")[:200], raw, suffix
+            )
+            background_tasks.add_task(store.prepare_media, space_id, item["material_id"])
+            response.status_code = 202
+            return {**item, "id": item["material_id"]}
         if suffix == ".pdf":
             try:
                 return await asyncio.to_thread(
@@ -103,6 +144,54 @@ def create_app(settings=None, provider=None):
     @app.get("/api/spaces/{space_id}/materials/{material_id}")
     async def material(space_id: str, material_id: str):
         return store.material(space_id, material_id)
+
+    @app.get("/api/spaces/{space_id}/materials/{material_id}/media")
+    async def media(space_id: str, material_id: str):
+        return store.media(space_id, material_id)
+
+    @app.get("/api/spaces/{space_id}/materials/{material_id}/segments")
+    async def segments(space_id: str, material_id: str):
+        return store.segments(space_id, material_id)
+
+    @app.get("/api/spaces/{space_id}/materials/{material_id}/playback")
+    async def playback(space_id: str, material_id: str):
+        item = store.media(space_id, material_id)
+        if item["state"] != "ready":
+            raise HTTPException(409, item["error"] or "媒体仍在准备，请稍后刷新")
+        return FileResponse(
+            store.root / item["preview_path"],
+            media_type="video/mp4" if item["has_video"] else "audio/mp4",
+        )
+
+    @app.post("/api/spaces/{space_id}/materials/{material_id}/prepare", status_code=202)
+    async def retry_media(space_id: str, material_id: str, background_tasks: BackgroundTasks):
+        if not store.claim_media_job(space_id, material_id):
+            raise HTTPException(409, "正在准备，请等待")
+        background_tasks.add_task(store.prepare_media, space_id, material_id)
+        return {"state": "processing"}
+
+    @app.post("/api/spaces/{space_id}/materials/{material_id}/captions")
+    async def captions(space_id: str, material_id: str, file: UploadFile):
+        if Path(file.filename or "").suffix.lower() not in {".srt", ".vtt"}:
+            raise HTTPException(422, "请上传UTF-8 SRT或VTT字幕")
+        raw = await file.read(2_000_001)
+        if len(raw) > 2_000_000:
+            raise HTTPException(413, "字幕文件最多2 MB")
+        item = store.media(space_id, material_id)
+        segments = parse_captions(raw, item["duration"])
+        store.save_segments(
+            space_id, material_id, segments, "uploaded:" + (file.filename or "captions")[:200]
+        )
+        return {"segment_count": len(segments), "transcript_state": "ready"}
+
+    @app.post("/api/spaces/{space_id}/materials/{material_id}/transcribe", status_code=202)
+    async def transcribe(space_id: str, material_id: str, background_tasks: BackgroundTasks):
+        if settings.asr_provider == "disabled":
+            raise HTTPException(503, "请配置语音识别，或先上传SRT/VTT字幕")
+        if not store.claim_media_job(space_id, material_id, transcription=True):
+            raise HTTPException(409, "已在转写，请等待")
+        background_tasks.add_task(store.transcribe_media, space_id, material_id, settings)
+        return {"transcript_state": "running"}
 
     @app.get("/api/spaces/{space_id}/materials/{material_id}/pages")
     async def pages(space_id: str, material_id: str):
@@ -135,9 +224,14 @@ def create_app(settings=None, provider=None):
     @app.post("/api/conversations/{conversation_id}/messages")
     async def ask(conversation_id: str, payload: Question):
         conv = store.get_conversation(conversation_id)
-        focus = payload.focus.model_dump() if payload.focus else None
+        focus = payload.focus.model_dump(exclude_none=True) if payload.focus else None
         if focus:
-            store.page(conv["space_id"], focus["material_id"], focus["page"])
+            if "page" in focus:
+                store.page(conv["space_id"], focus["material_id"], focus["page"])
+            else:
+                item = store.media(conv["space_id"], focus["material_id"])
+                if focus["end_seconds"] > item["duration"]:
+                    raise HTTPException(422, "片段超出媒体时长")
         if provider is None and not settings.api_key.get_secret_value():
             raise HTTPException(503, "请在本机 .env 中配置 LA_API_KEY；当前不会调用模型。")
         try:
