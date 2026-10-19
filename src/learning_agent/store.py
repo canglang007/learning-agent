@@ -432,3 +432,22 @@ class Store:
         if row is None:
             raise LookupError("运行不存在")
         return {**dict(row), "events": json.loads(row["events"])}
+
+    def reference_context(self, run_id):
+        """Only this conversation's observations up through the requested turn."""
+        with self.connect() as db:
+            run = db.execute(
+                "SELECT rowid,conversation_id FROM runs WHERE id=?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise LookupError("运行不存在")
+            answer = db.execute(
+                "SELECT content FROM messages WHERE run_id=? AND role='assistant'", (run_id,)
+            ).fetchone()
+            rows = db.execute(
+                "SELECT events FROM runs WHERE conversation_id=? AND rowid<=? ORDER BY rowid",
+                (run["conversation_id"], run["rowid"]),
+            ).fetchall()
+        return (answer[0] if answer else ""), [
+            event for row in rows for event in json.loads(row[0])
+        ]

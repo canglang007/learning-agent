@@ -29,6 +29,22 @@ function markdown(node,text) {
   renderMathInElement(node,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false},{left:'$',right:'$',display:false}],throwOnError:false,trust:false,strict:'warn'});
 }
 function player() {return media?.has_video?$('video-player'):$('audio-player');}
+function linkReferences(body,references) {
+  const verified=references.filter(r=>r.position_verified);
+  const walker=document.createTreeWalker(body,NodeFilter.SHOW_TEXT), texts=[];
+  while(walker.nextNode())if(!walker.currentNode.parentElement.closest('a,code,pre,.katex'))texts.push(walker.currentNode);
+  for(const text of texts){
+    const matches=[];
+    for(const ref of verified){let from=0,index;while((index=text.textContent.indexOf(ref.label,from))!==-1){matches.push({index,ref});from=index+ref.label.length;}}
+    if(!matches.length)continue;
+    matches.sort((a,b)=>a.index-b.index);const fragment=document.createDocumentFragment();let cursor=0;
+    for(const {index,ref} of matches){if(index<cursor)continue;fragment.append(document.createTextNode(text.textContent.slice(cursor,index)));const a=document.createElement('a');a.href=ref.url;a.textContent=ref.label;
+      a.onclick=guarded(async e=>{e.preventDefault();if(ref.kind==='media')await showMedia(ref.material_id,ref.start_seconds,ref.end_seconds);else await showPage(ref.material_id,ref.page);});
+      fragment.append(a);cursor=index+ref.label.length;
+    }
+    fragment.append(document.createTextNode(text.textContent.slice(cursor)));text.replaceWith(fragment);
+  }
+}
 function clearPosition() {
   focus=null;$('reader').hidden=true;$('media-reader').hidden=true;$('focus-hint').textContent='';
   $('video-player').pause();$('audio-player').pause();media=null;clearTimeout(poll);
@@ -58,6 +74,7 @@ async function loadChat() {
       const sources=document.createElement('div');sources.className='sources';article.append(sources);
       const details=document.createElement('details');details.innerHTML='<summary>查看本轮工具与执行状态</summary><pre>加载中…</pre>';article.append(details);
       api(`/runs/${m.run_id}`).then(r=>{
+        linkReferences(body,r.references||[]);
         details.querySelector('pre').textContent=JSON.stringify(r,null,2);const seen=new Set();
         for(const event of r.events) {
           const o=event.observation;if(event.type!=='tool'||!o||o.error)continue;

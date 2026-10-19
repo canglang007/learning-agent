@@ -12,6 +12,7 @@ from learning_agent.config import Settings
 from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
 from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
+from learning_agent.references import resolve_references
 from learning_agent.store import Store
 
 
@@ -241,6 +242,9 @@ def create_app(settings=None, provider=None):
 
     @app.get("/api/runs/{run_id}")
     async def run(run_id: str):
-        return store.run(run_id)
+        result = store.run(run_id)
+        answer, events = store.reference_context(run_id)
+        space_id = store.get_conversation(result["conversation_id"])["space_id"]
+        return {**result, "references": resolve_references(answer, events, space_id)}
 
     return app

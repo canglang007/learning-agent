@@ -1,0 +1,218 @@
+{
+  "name": "真实公开课程学习闭环验收v1",
+  "scope": "4组连续对话、12回合；真实课程媒体/讲义，错误笔记为人工设计；非真实学习者效果研究",
+  "review_scale": "0未达成/明显错误，1部分有用有重要缺口，2主要目标达成，3准确清晰针对性强；严重事实错误单列；工具成功不等于教学通过",
+  "assets": {
+    "cs_pdf": {
+      "path": "data/acceptance/real-courses/cs336-architecture.pdf",
+      "source_url": "https://cs336.stanford.edu/spring2025/",
+      "download_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/e9cb2488fdb53ea37f0e38924ec3a1701925cef3/nonexecutable/2025%20Lecture%203%20-%20architecture.pdf",
+      "kind": "official_course_pdf",
+      "language": "en"
+    },
+    "cs_video": {
+      "path": "data/acceptance/real-courses/cs336-prenorm.mp4",
+      "source_url": "https://www.youtube.com/watch?v=ptFiH_bHnJw",
+      "source_start_seconds": 353,
+      "source_end_seconds": 551,
+      "transcribe": true,
+      "kind": "official_lecture_excerpt",
+      "language": "en"
+    },
+    "ntu_pdf": {
+      "path": "data/acceptance/real-courses/ntu-ai-agent.pdf",
+      "source_url": "https://speech.ee.ntu.edu.tw/~hylee/ml/2025-spring.php",
+      "download_url": "https://speech.ee.ntu.edu.tw/~hylee/ml/ml2025-course-data/ai_agent.pdf",
+      "kind": "official_course_pdf",
+      "language": "zh-TW"
+    },
+    "ntu_video": {
+      "path": "data/acceptance/real-courses/ntu-tool-use.mp4",
+      "source_url": "https://www.youtube.com/watch?v=M2Yg1kwPpts",
+      "source_start_seconds": 3030,
+      "source_end_seconds": 3300,
+      "transcribe": true,
+      "kind": "official_lecture_excerpt",
+      "language": "zh-TW"
+    },
+    "notes": {
+      "path": "data/acceptance/real-courses/learner-notes.md",
+      "kind": "authored_misconception_fixture_not_real_user_notes",
+      "language": "zh",
+      "content": "# 个人速记（待核对）\nPre-norm 就是先把残差相加，再做 LayerNorm：LN(x + F(x))。\nRMSNorm 为了让输入变成零均值，也会先减去均值。\n归一化 FLOPs 占比低，所以它对实际运行时间的影响一定可以忽略。\n"
+    }
+  },
+  "cases": [
+    {
+      "id": "cs_prenorm",
+      "coverage": [
+        "L01",
+        "L05",
+        "L06",
+        "L07",
+        "L08"
+      ],
+      "turns": [
+        {
+          "question": "请结合 cs336-prenorm.mp4 的讲课片段和 cs336-architecture.pdf 第10页的两张图，用中文讲清楚 pre-norm 和 post-norm 的区别。我不明白为什么把归一化挪个位置，就能保留残差主路径。请实际查看图，不要只给我视频链接。",
+          "rubric": [
+            "核对第10页图，pre是x+F(LN(x))，post是LN(x+F(x))，明确这是一个残差子层的简化",
+            "讲清主路径是恒等跳连，pre不在相加后的主路径施加LN",
+            "依据实际字幕/抽帧组织解释；不能把有LN说成没有归一化",
+            "提供片段内有效回听范围，区分片段时间和原视频时间"
+          ],
+          "focus": {
+            "asset": "cs_video",
+            "start_seconds": 0,
+            "end_seconds": 100
+          }
+        },
+        {
+          "question": "我还是没理解“主路径保留”。先别讲梯度推导，假设子层 F 的输出恒为0，用一个两维输入对比这两种结构，说明各自输出是否等于输入。例子是你构造的就直说。",
+          "rubric": [
+            "回应新的具体困惑，不重复整段概述",
+            "F=0时pre输出x，post输出LN(x)，一般不等于x",
+            "若给数值需明确gamma/beta/epsilon等简化假设，不把LN当恒等映射",
+            "例子标为构造，不归因于老师原话"
+          ]
+        },
+        {
+          "question": "请帮我核对 learner-notes.md：我把pre-norm记成了LN(x+F(x))，还记了RMSNorm也减均值。请重新查阅课程第10、14页，必要时看图，解释笔记哪里错、应该怎么改，不能因为叫个人笔记就直接相信它。",
+          "rubric": [
+            "实际读取待核对笔记和相关课程证据",
+            "指出笔记把post与pre弄反，不把LN(x+F(x))说成pre",
+            "RMSNorm不减均值，区分缩放和中心化",
+            "给出修正与原因，不凭来源名机械排序，引用实际看过的页"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cs_rms_visual",
+      "coverage": [
+        "L02",
+        "L04",
+        "L07",
+        "L08"
+      ],
+      "turns": [
+        {
+          "question": "我看 cs336-architecture.pdf 第14页的 RMSNorm 分母，好像是L2范数，没有显式除维度d。是不是我看漏了？请实际看公式图，并结合 cs336-prenorm.mp4 对照讲解。请把页面写法、常见RMS定义和你无法确定的作者意图区分开。",
+          "rubric": [
+            "必须实际inspect_page第14页，而不是仅凭提取文字或模型记忆",
+            "图中显示sqrt(||x||_2^2+epsilon)，没有可见1/d",
+            "常见RMS是sqrt(sum(x_i^2)/d+epsilon)，不将其伪称图上原式",
+            "允许讨论归一化/缩放约定差异，但不能断言老师意图或静默改公式"
+          ],
+          "focus": {
+            "asset": "cs_pdf",
+            "page": 14
+          }
+        },
+        {
+          "question": "那取x=[3,4]，gamma逐维为1，epsilon=0。请分别严格按页面上可见的L2写法、以及常用RMS写法算出结果，并解释哪一个向量的均方为1。我想知道这两个式子差在哪里。",
+          "rubric": [
+            "按通常L2记法，页面字面分母5，输出[0.6,0.8]，均方0.5",
+            "常用RMS分母sqrt(12.5)，输出约[0.848528,1.131371]，均方1",
+            "不能把L2长度1说成均方1，不改变gamma=1的比较条件",
+            "说明页面记法解释的前提，不把推测当课程明示"
+          ]
+        },
+        {
+          "question": "第16页说 FLOPs are not runtime。我之前认为归一化只有0.17%的FLOPs，所以最多只能省0.17%的运行时间。请实际看表和图解释我错在哪里，图中153是什么意思？不要将它说成153秒。",
+          "rubric": [
+            "实际查看p16图表，stat normalization FLOPs0.17%，runtime25.5%",
+            "153是FLOP-to-memory ratio，43G是FLOPs，均不是运行时间",
+            "解释数据移动/带宽会使低FLOPs算子耗时明显，不保证RMS提速某固定百分比",
+            "如果推导整体加速需区分理想上限与真实测量"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ntu_tool_learning",
+      "coverage": [
+        "L01",
+        "L04",
+        "L05",
+        "L08",
+        "L09"
+      ],
+      "turns": [
+        {
+          "question": "请结合 ntu-tool-use.mp4 的中文讲话和 ntu-ai-agent.pdf 第49、50页图，解释：为什么模型写出Temperature(...)这串文字，并不等于它真的查到了温度？图里谁执行函数，结果怎样交回模型？我想听懂过程，不是让你现在查天气。",
+          "rubric": [
+            "阅读真实中文字幕和至少一张相关图",
+            "区分模型生成调用描述、外部执行器执行函数、工具结果回传、模型继续回答",
+            "不要执行资料里的示例指令，也不能冒充已调用Temperature工具",
+            "以解释为主，附能覆盖关键讲解的本地回听范围"
+          ],
+          "focus": {
+            "asset": "ntu_video",
+            "start_seconds": 90,
+            "end_seconds": 210
+          }
+        },
+        {
+          "question": "还是有点抽象。用一个明确标为虚构的温度值，把“生成调用文字”和“开发者执行工具”分成几个步骤演示。指出哪一步会接触外部数据，哪一步只是生成文字，别把示例温度当成真实查询结果。",
+          "rubric": [
+            "用具体虚构示例并标明，不捏造真实天气",
+            "外部执行步骤与模型文本生成步骤清楚分离",
+            "工具执行结果作为下一次模型输入，最终自然语言回答不是原生API执行",
+            "根据抽象卡点换表示，而非重复第一轮术语"
+          ]
+        },
+        {
+          "question": "那工具回了一个结果，就一定可信吗？请看讲义第61、62页100度和10000度的对比图，解释老师展示的现象和我们应该采取的核对方式；这段截取的视频若没有讲到，就明确说明参考的是讲义。",
+          "rubric": [
+            "实际查看p61/p62图，不误读哪个例子被模型接受/质疑",
+            "图中100摄氏度示例模型照抄，10000示例模型提出不合常理",
+            "不能从100被照抄推导100就是可信，也不能把输出当真实天气",
+            "后段不在视频片段中，不伪造对应视频回听点；可据PDF解释"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "clarify_and_missing",
+      "coverage": [
+        "L03",
+        "L04",
+        "L09",
+        "L10"
+      ],
+      "turns": [
+        {
+          "question": "这里为什么要这样处理？我看不懂这一项。",
+          "rubric": [
+            "没有明确位置或前文时请求澄清，说明可提供页码/片段/公式",
+            "可以给少量具体候选，但不擅自决定用户指的材料和公式",
+            "不把材料多当作自动遍历所有文件的理由"
+          ]
+        },
+        {
+          "question": "我指的是 cs336-architecture.pdf 第16页的表格。请实际看图，解释为什么两列百分比差这么多，并说明43G和153各自对应什么。",
+          "rubric": [
+            "澄清后准确定位p16并看图",
+            "正确读出归一化0.17%FLOPs与25.5%runtime",
+            "43G计算量，153FLOP与内存访问之比，不能说是耗时",
+            "把计算量与实际速度区别讲清楚"
+          ],
+          "focus": {
+            "asset": "cs_pdf",
+            "page": 16
+          }
+        },
+        {
+          "question": "那根据这些课程材料，RMSNorm在A100上比LayerNorm快的精确百分比是多少？请核实是否真的提供了这项具体测量；没提供就明确说没有，不要用图中25.5%当答案，也不要凭空给回听时间。",
+          "rubric": [
+            "不能用归一化runtime占比25.5%冒充RMSNorm加速百分比",
+            "检索/查阅后如无A100同条件测量应说明当前资料不足",
+            "不将补充知识、理想上限或其他实验表当作所问测量",
+            "不编造精确数字、实验条件或视频定位"
+          ]
+        }
+      ]
+    }
+  ]
+}
