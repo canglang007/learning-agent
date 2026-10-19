@@ -10,6 +10,7 @@ from learning_agent.config import Settings
 from learning_agent.media import MediaError, command, parse_captions
 from learning_agent.store import Store
 from learning_agent.tools import MaterialTools
+from learning_agent.worker import Worker
 
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
 
@@ -51,6 +52,8 @@ def prepared(tmp_path, clip, model=None, **kwargs):
     assert upload.status_code == 202
     material = upload.json()["id"]
     base = f"/api/spaces/{space}/materials/{material}"
+    with Worker(config) as worker:
+        worker.drain()
     assert client.get(base + "/media").json()["state"] == "ready"
     return client, space, material, base, config, model
 
@@ -162,10 +165,18 @@ def test_recovery_and_no_audio_and_invalid_media(tmp_path, clip):
     client, space, material, base, config, _ = prepared(tmp_path, clip, asr_provider="local")
     assert client.post(base + "/transcribe").status_code == 422
     store = Store(config.data_root)
-    assert store.claim_media_job(space, material)
+    # API startup cannot invalidate work owned by another process.
+    with store.connect() as db:
+        db.execute("UPDATE media SET state='processing' WHERE material_id=?", (material,))
+        db.execute("DELETE FROM jobs WHERE material_id=?", (material,))
     create_app(config, Scripted([]))
-    assert store.media(space, material)["state"] == "failed"
+    assert store.media(space, material)["state"] == "processing"
+    with Worker(config) as worker:
+        worker.drain()
+    assert store.media(space, material)["state"] == "ready"
     assert client.post(base + "/prepare").status_code == 202
+    with Worker(config) as worker:
+        worker.drain()
     assert store.media(space, material)["state"] == "ready"
     assert (
         client.post(
@@ -267,6 +278,8 @@ def test_local_asr_accepts_decoded_waveform_and_failure_preserves_captions(tmp_p
     base = f"/api/spaces/{space}/materials/{material}"
     assert client.get(base + "/media").json()["format"] == "audio"
     assert client.post(base + "/transcribe").status_code == 202
+    with Worker(config) as worker:
+        worker.drain()
     assert client.get(base + "/segments").json()[0]["text"] == "speech"
 
     def fail(*args):
@@ -274,5 +287,7 @@ def test_local_asr_accepts_decoded_waveform_and_failure_preserves_captions(tmp_p
 
     monkeypatch.setattr(media, "transcribe", fail)
     assert client.post(base + "/transcribe").status_code == 202
+    with Worker(config) as worker:
+        worker.drain()
     assert client.get(base + "/media").json()["transcript_state"] == "failed"
     assert client.get(base + "/segments").json()[0]["text"] == "speech"

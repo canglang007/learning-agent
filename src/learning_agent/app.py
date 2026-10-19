@@ -2,13 +2,14 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Response, UploadFile
+from fastapi import FastAPI, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 from learning_agent.agent import run_turn
 from learning_agent.config import Settings
+from learning_agent.jobs import JobConflict, Jobs
 from learning_agent.learning import Feedback, FeedbackError
 from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
 from learning_agent.pdf import PdfError
@@ -63,9 +64,11 @@ def create_app(settings=None, provider=None):
     settings = settings or Settings()
     store = Store(settings.data_root)
     retriever = Retriever(store, settings)
-    store.recover_media()
+    jobs = Jobs(store)
     model = provider or OpenAIProvider(settings)
     app = FastAPI(title="Learning Agent · 多模态学习讲解")
+    app.state.store = store
+    app.state.jobs = jobs
     app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 
     @app.exception_handler(MediaError)
@@ -73,6 +76,12 @@ def create_app(settings=None, provider=None):
         from fastapi.responses import JSONResponse
 
         return JSONResponse({"detail": str(error)}, status_code=422)
+
+    @app.exception_handler(JobConflict)
+    async def job_conflict(request, error):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse({"detail": str(error)}, status_code=409)
 
     @app.exception_handler(LookupError)
     async def missing(request, error):
@@ -97,6 +106,7 @@ def create_app(settings=None, provider=None):
             "retrieval": settings.retrieval_mode,
             "embedding_provider": settings.embedding_provider,
             "verification": "inspect_actual_run_results",
+            "worker_online": jobs.online(),
         }
 
     @app.get("/api/spaces")
@@ -118,10 +128,23 @@ def create_app(settings=None, provider=None):
         return await asyncio.to_thread(retriever.status, space_id)
 
     @app.post("/api/spaces/{space_id}/retrieval", status_code=202)
-    async def prepare_index(space_id: str, background_tasks: BackgroundTasks):
+    async def prepare_index(space_id: str):
         store.require_space(space_id)
-        background_tasks.add_task(retriever.prepare, space_id)
-        return {"state": "queued"}
+        if settings.embedding_provider == "disabled":
+            raise HTTPException(503, "尚未配置向量服务，关键词检索仍可用")
+        return jobs.enqueue("index", space_id, settings)
+
+    @app.get("/api/spaces/{space_id}/jobs")
+    async def list_jobs(space_id: str):
+        return {"worker_online": jobs.online(), "jobs": jobs.list(space_id)}
+
+    @app.get("/api/jobs/{job_id}")
+    async def get_job(job_id: str):
+        return {**jobs.get(job_id), "worker_online": jobs.online()}
+
+    @app.post("/api/jobs/{job_id}/{action}")
+    async def change_job(job_id: str, action: str):
+        return jobs.action(job_id, action)
 
     @app.get("/api/spaces/{space_id}/materials/{material_id}/outline")
     async def outline(space_id: str, material_id: str, start: int = 0):
@@ -137,9 +160,7 @@ def create_app(settings=None, provider=None):
         return store.set_source(space_id, material_id, payload.model_dump(mode="json"))
 
     @app.post("/api/spaces/{space_id}/materials", status_code=201)
-    async def upload(
-        space_id: str, file: UploadFile, background_tasks: BackgroundTasks, response: Response
-    ):
+    async def upload(space_id: str, file: UploadFile, response: Response):
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in {".txt", ".md", ".pdf"} | MEDIA_SUFFIXES:
             raise HTTPException(422, "支持文字、PDF、常用音频/视频格式")
@@ -157,9 +178,9 @@ def create_app(settings=None, provider=None):
             item = await asyncio.to_thread(
                 store.add_media, space_id, (file.filename or "media")[:200], raw, suffix
             )
-            background_tasks.add_task(store.prepare_media, space_id, item["material_id"])
+            job = jobs.enqueue("preview", space_id, settings, item["material_id"])
             response.status_code = 202
-            return {**item, "id": item["material_id"]}
+            return {**item, "id": item["material_id"], "job_id": job["id"]}
         if suffix == ".pdf":
             try:
                 return await asyncio.to_thread(
@@ -198,11 +219,8 @@ def create_app(settings=None, provider=None):
         )
 
     @app.post("/api/spaces/{space_id}/materials/{material_id}/prepare", status_code=202)
-    async def retry_media(space_id: str, material_id: str, background_tasks: BackgroundTasks):
-        if not store.claim_media_job(space_id, material_id):
-            raise HTTPException(409, "正在准备，请等待")
-        background_tasks.add_task(store.prepare_media, space_id, material_id)
-        return {"state": "processing"}
+    async def retry_media(space_id: str, material_id: str):
+        return jobs.enqueue("preview", space_id, settings, material_id)
 
     @app.post("/api/spaces/{space_id}/materials/{material_id}/captions")
     async def captions(space_id: str, material_id: str, file: UploadFile):
@@ -219,13 +237,10 @@ def create_app(settings=None, provider=None):
         return {"segment_count": len(segments), "transcript_state": "ready"}
 
     @app.post("/api/spaces/{space_id}/materials/{material_id}/transcribe", status_code=202)
-    async def transcribe(space_id: str, material_id: str, background_tasks: BackgroundTasks):
+    async def transcribe(space_id: str, material_id: str):
         if settings.asr_provider == "disabled":
             raise HTTPException(503, "请配置语音识别，或先上传SRT/VTT字幕")
-        if not store.claim_media_job(space_id, material_id, transcription=True):
-            raise HTTPException(409, "已在转写，请等待")
-        background_tasks.add_task(store.transcribe_media, space_id, material_id, settings)
-        return {"transcript_state": "running"}
+        return jobs.enqueue("transcribe", space_id, settings, material_id)
 
     @app.get("/api/spaces/{space_id}/materials/{material_id}/pages")
     async def pages(space_id: str, material_id: str):

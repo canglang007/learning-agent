@@ -14,6 +14,7 @@ from learning_agent.app import create_app
 from learning_agent.config import Settings
 from learning_agent.media import command, probe
 from learning_agent.store import Store
+from learning_agent.worker import Worker
 
 
 def save(path, report):
@@ -137,7 +138,7 @@ def main():
     )
     settings = settings.model_copy(update={"data_root": root / "workspace"})
     store = Store(settings.data_root)
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings)) as client, Worker(settings) as worker:
         if "space_id" not in report:
             report["space_id"] = client.post("/api/spaces", json={"content": suite["name"]}).json()[
                 "id"
@@ -153,11 +154,13 @@ def main():
             )
             response.raise_for_status()
             material_id = response.json()["id"]
+            worker.drain()
             asset = {**spec, "id": material_id, "ingestion_s": round(time.monotonic() - start, 2)}
             if spec.get("transcribe"):
                 start = time.monotonic()
                 response = client.post(f"/api/spaces/{space}/materials/{material_id}/transcribe")
                 response.raise_for_status()
+                worker.drain()
                 info = client.get(f"/api/spaces/{space}/materials/{material_id}/media").json()
                 if info["state"] != "ready" or info["transcript_state"] != "ready":
                     raise SystemExit(

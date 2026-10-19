@@ -2,12 +2,15 @@
 
 import json
 import math
+import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
 import wave
+from contextvars import ContextVar
 from pathlib import Path
 
 import httpx
@@ -15,6 +18,7 @@ import httpx
 MEDIA_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".mp3", ".m4a", ".wav", ".ogg", ".flac"}
 _asr_lock = threading.Lock()
 _models = {}
+_worker_lock_fd = ContextVar("worker_lock_fd", default=None)
 
 
 class MediaError(ValueError):
@@ -25,7 +29,26 @@ def command(args, timeout=180):
     if not shutil.which(args[0]):
         raise MediaError("需要在本机安装 ffmpeg（包含 ffprobe）后处理音视频")
     try:
-        return subprocess.run(args, capture_output=True, check=True, timeout=timeout).stdout
+        lock_fd = _worker_lock_fd.get()
+        process = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            pass_fds=() if lock_fd is None else (lock_fd,),
+        )
+        try:
+            stdout, _ = process.communicate(timeout=timeout)
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, args)
+            return stdout
+        finally:
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
     except (subprocess.SubprocessError, OSError):
         raise MediaError("媒体解码失败或超时，请确认文件完整且编码受支持") from None
 

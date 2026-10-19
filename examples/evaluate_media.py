@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from learning_agent.app import create_app
 from learning_agent.config import Settings
+from learning_agent.worker import Worker
 
 
 def main():
@@ -33,7 +34,7 @@ def main():
         "quality_review": "pending",
         "cases": [],
     }
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings)) as client, Worker(settings) as worker:
         space = client.post("/api/spaces", json={"content": "音视频联合讲解验收"}).json()["id"]
 
         def upload(path):
@@ -44,6 +45,7 @@ def main():
             return response.json()
 
         material = upload(options.file)["id"]
+        worker.drain()
         if options.companion:
             upload(options.companion)
         base = f"/api/spaces/{space}/materials/{material}"
@@ -57,6 +59,7 @@ def main():
             start = time.monotonic()
             response = client.post(base + "/transcribe")
             response.raise_for_status()
+            worker.drain()
             report["asr_latency_s"] = round(time.monotonic() - start, 2)
         report["media"] = client.get(base + "/media").json()
         report["segments"] = client.get(base + "/segments").json()

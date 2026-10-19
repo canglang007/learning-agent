@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -11,6 +12,7 @@ class Store:
         (root / "materials").mkdir(parents=True, exist_ok=True)
         self.path = root / "workspace.db"
         with self.connect() as db:
+            db.execute("PRAGMA journal_mode=WAL")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS spaces (id TEXT PRIMARY KEY, name TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS materials (
@@ -39,6 +41,10 @@ class Store:
                     material_id TEXT NOT NULL, seq INTEGER NOT NULL,
                     start REAL NOT NULL, end REAL NOT NULL, text TEXT NOT NULL,
                     PRIMARY KEY(material_id,seq));
+                CREATE TABLE IF NOT EXISTS transcript_revisions (
+                    material_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                    source TEXT NOT NULL, segments TEXT NOT NULL, alignment_notes TEXT NOT NULL,
+                    PRIMARY KEY(material_id,revision));
                 CREATE TABLE IF NOT EXISTS material_index (
                     material_id TEXT PRIMARY KEY, revision INTEGER, version INTEGER);
                 CREATE TABLE IF NOT EXISTS chunks (
@@ -62,10 +68,16 @@ class Store:
                 db.execute("ALTER TABLE materials ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
             if "source" not in columns:
                 db.execute("ALTER TABLE materials ADD COLUMN source TEXT NOT NULL DEFAULT '{}'")
+            media_columns = {row[1] for row in db.execute("PRAGMA table_info(media)")}
+            if "transcript_revision" not in media_columns:
+                db.execute(
+                    "ALTER TABLE media ADD COLUMN transcript_revision INTEGER NOT NULL DEFAULT 0"
+                )
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path)
+        db = sqlite3.connect(self.path, timeout=5)
+        db.execute("PRAGMA busy_timeout=5000")
         db.row_factory = sqlite3.Row
         try:
             with db:
@@ -230,16 +242,6 @@ class Store:
             )
         return self.media(space_id, material_id)
 
-    def recover_media(self):
-        # Local background work is not a persistent queue. Recover visibly, offer retry.
-        with self.connect() as db:
-            db.execute(
-                "UPDATE media SET state='failed',error='服务中断，请重试准备' WHERE state='processing'"
-            )
-            db.execute(
-                "UPDATE media SET transcript_state='failed',transcript_error='服务中断，请重试转写' WHERE transcript_state='running'"
-            )
-
     def media(self, space_id, material_id):
         material = self.material(space_id, material_id)
         with self.connect() as db:
@@ -260,35 +262,6 @@ class Store:
             "playback_url": f"/api/spaces/{space_id}/materials/{material_id}/playback",
         }
 
-    def prepare_media(self, space_id, material_id):
-        from learning_agent.media import MediaError, prepare
-
-        info = self.media(space_id, material_id)
-        try:
-            prepare(self.root / info["original_path"], self.root / info["preview_path"], info)
-            state, error = "ready", None
-        except MediaError as exception:
-            state, error = "failed", str(exception)
-        with self.connect() as db:
-            db.execute(
-                "UPDATE media SET state=?,error=? WHERE material_id=?", (state, error, material_id)
-            )
-
-    def claim_media_job(self, space_id, material_id, transcription=False):
-        from learning_agent.media import MediaError
-
-        info = self.media(space_id, material_id)
-        if transcription and not info["has_audio"]:
-            raise MediaError("该视频没有音轨，可查看画面或上传已有字幕")
-        column = "transcript_state" if transcription else "state"
-        running = "running" if transcription else "processing"
-        with self.connect() as db:
-            changed = db.execute(
-                f"UPDATE media SET {column}=? WHERE material_id=? AND {column}!=?",
-                (running, material_id, running),
-            ).rowcount
-        return bool(changed)
-
     def segments(self, space_id, material_id):
         self.media(space_id, material_id)
         with self.connect() as db:
@@ -301,18 +274,30 @@ class Store:
             ]
 
     def save_segments(
-        self, space_id, material_id, segments, source, from_job=False, alignment_notes=None
+        self, space_id, material_id, segments, source, alignment_notes=None, job=None
     ):
-        from learning_agent.media import MediaError, valid_segments
+        from learning_agent.jobs import Jobs
+        from learning_agent.media import valid_segments
 
         info = self.media(space_id, material_id)
         segments = valid_segments(segments, info["duration"])
+        jobs = Jobs(self)
         with self.connect() as db:
-            state = db.execute(
-                "SELECT transcript_state FROM media WHERE material_id=?", (material_id,)
-            ).fetchone()[0]
-            if state == "running" and not from_job:
-                raise MediaError("正在转写，请等待结束后再上传字幕，避免相互覆盖")
+            db.execute("BEGIN IMMEDIATE")
+            if job:
+                jobs.check(job, db)
+            else:
+                # Uploaded captions supersede candidates, including an in-flight ASR response.
+                db.execute(
+                    "UPDATE jobs SET state='cancelled',cancel_requested=1,error='已由新字幕替代' WHERE material_id=? AND kind='transcribe' AND state IN ('queued','running','paused')",
+                    (material_id,),
+                )
+            revision = (
+                db.execute(
+                    "SELECT transcript_revision FROM media WHERE material_id=?", (material_id,)
+                ).fetchone()[0]
+                + 1
+            )
             db.execute("DELETE FROM transcript_segments WHERE material_id=?", (material_id,))
             self.invalidate_index(db, material_id)
             db.executemany(
@@ -320,8 +305,18 @@ class Store:
                 [(material_id, i, s["start"], s["end"], s["text"]) for i, s in enumerate(segments)],
             )
             db.execute(
-                "UPDATE media SET transcript_state='ready',transcript_source=?,transcript_error=NULL WHERE material_id=?",
-                (source, material_id),
+                "UPDATE media SET transcript_state='ready',transcript_source=?,transcript_error=NULL,transcript_revision=? WHERE material_id=?",
+                (source, revision, material_id),
+            )
+            db.execute(
+                "INSERT INTO transcript_revisions VALUES (?,?,?,?,?)",
+                (
+                    material_id,
+                    revision,
+                    source,
+                    json.dumps(segments, ensure_ascii=False),
+                    json.dumps(alignment_notes or []),
+                ),
             )
 
             metadata = json.loads(
@@ -334,6 +329,12 @@ class Store:
                 "UPDATE media SET metadata=? WHERE material_id=?",
                 (json.dumps(metadata), material_id),
             )
+            if job:
+                # The transcript revision changed above; finish against the checked input.
+                db.execute(
+                    "UPDATE jobs SET state='succeeded',stage='completed',completed=total,remote_pending=0,error=NULL,updated=? WHERE id=? AND token=?",
+                    (time.time(), job["id"], job["token"]),
+                )
 
     @staticmethod
     def invalidate_index(db, material_id):
@@ -353,27 +354,6 @@ class Store:
             )
             self.invalidate_index(db, material_id)
         return source
-
-    def transcribe_media(self, space_id, material_id, settings):
-        from learning_agent.media import MediaError, transcribe
-
-        info = self.media(space_id, material_id)
-        try:
-            result = transcribe(self.root / info["original_path"], info["duration"], settings)
-            self.save_segments(
-                space_id,
-                material_id,
-                result["segments"],
-                f"asr:{settings.asr_provider}:{settings.asr_model}",
-                from_job=True,
-                alignment_notes=result["alignment_notes"],
-            )
-        except MediaError as error:
-            with self.connect() as db:
-                db.execute(
-                    "UPDATE media SET transcript_state='failed',transcript_error=? WHERE material_id=?",
-                    (str(error), material_id),
-                )
 
     def media_frame(self, space_id, material_id, seconds):
         from PIL import Image

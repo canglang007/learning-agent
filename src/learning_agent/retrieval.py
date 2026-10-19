@@ -11,6 +11,7 @@ from uuid import NAMESPACE_URL, uuid5
 import httpx
 
 from learning_agent.config import Settings
+from learning_agent.jobs import Jobs, configuration
 
 INDEX_VERSION = 2
 
@@ -75,7 +76,10 @@ def course_scope(query, chunks):
     cleaned = query
     for identifier in identifiers:
         cleaned = re.sub(
-            r"(?<![a-z0-9])" + re.escape(identifier) + r"(?![a-z0-9])", " ", cleaned, flags=re.IGNORECASE
+            r"(?<![a-z0-9])" + re.escape(identifier) + r"(?![a-z0-9])",
+            " ",
+            cleaned,
+            flags=re.IGNORECASE,
         )
     return selected, cleaned.strip() or query, sorted({c["id"] for c in selected})
 
@@ -383,6 +387,7 @@ class Retriever:
         self.embedder = embedder or Embedder(self.settings)
         self.lock = threading.Lock()
         self.jobs = {}
+        self.queue = Jobs(store)
 
     def vectors(self, chunks):
         ids = {c["chunk_id"] for c in chunks}
@@ -395,24 +400,38 @@ class Retriever:
     def status(self, space):
         chunks = self.index.chunks(space)
         count = len(self.vectors(chunks))
+        with self.store.connect() as db:
+            latest = db.execute(
+                "SELECT state,error,config,input_version FROM jobs WHERE space_id=? AND kind='index' ORDER BY created DESC LIMIT 1",
+                (space,),
+            ).fetchone()
+        state = self.jobs.get(space, {})
+        if (
+            latest
+            and json.loads(latest["config"]) == configuration("index", self.settings)
+            and latest["input_version"] == self.queue.version("index", space)
+        ):
+            state = dict(latest)
         return {
             "chunks": len(chunks),
             "embedded": count,
             "provider": self.settings.embedding_provider,
             "model": self.settings.embedding_model,
-            "state": self.jobs.get(space, {}).get("state")
-            if self.jobs.get(space, {}).get("state") in {"running", "failed", "disabled"}
+            "state": state.get("state")
+            if state.get("state")
+            in {"queued", "running", "paused", "failed", "cancelled", "disabled"}
             else "ready"
             if count == len(chunks) and chunks
             else "pending",
-            "error": self.jobs.get(space, {}).get("error"),
+            "error": state.get("error"),
+            "worker_online": self.queue.online(),
             "dense_ready": bool(chunks)
             and count == len(chunks)
             and self.settings.embedding_provider != "disabled",
         }
 
-    def prepare(self, space):
-        # Single local process. Multiple queued requests are coalesced by checking persisted vectors.
+    def prepare(self, space, observer=None, raise_errors=False):
+        # The worker serializes jobs; direct script callers retain vector-cache reuse.
         with self.lock:
             self.jobs[space] = {"state": "running"}
             try:
@@ -424,8 +443,11 @@ class Retriever:
                     return
                 for start in range(0, len(pending), 16):
                     batch = pending[start : start + 16]
+                    if observer:
+                        observer("before", len(vectors) + start, len(chunks), batch)
                     embedded = self.embedder.embed([c["excerpt"] for c in batch])
                     with self.store.connect() as db:
+                        db.execute("BEGIN IMMEDIATE")
                         for chunk, vector in zip(batch, embedded):
                             # Caption updates may have invalidated this batch during inference.
                             if db.execute(
@@ -435,9 +457,19 @@ class Retriever:
                                     "INSERT OR REPLACE INTO chunk_vectors VALUES (?,?,?)",
                                     (chunk["chunk_id"], self.embedder.key, json.dumps(vector)),
                                 )
+                        if observer:
+                            observer(
+                                "saved",
+                                len(vectors) + start + len(batch),
+                                len(chunks),
+                                [c["chunk_id"] for c in batch],
+                                db,
+                            )
                 self.jobs[space] = {"state": "ready"}
             except EmbeddingError as error:
                 self.jobs[space] = {"state": "failed", "error": str(error)}
+                if raise_errors:
+                    raise
 
     def search(self, space, query, material_id=None):
         chunks = self.index.chunks(space, material_id)

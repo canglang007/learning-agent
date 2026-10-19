@@ -21,6 +21,7 @@ from learning_agent.references import resolve_references
 from learning_agent.retrieval import Retriever
 from learning_agent.store import Store
 from learning_agent.tools import MaterialTools
+from learning_agent.worker import Worker
 
 
 def save(path, value):
@@ -54,7 +55,7 @@ def main():
     store = Store(settings.data_root)
     manifest_path = root / "assets.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"assets": {}}
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings)) as client, Worker(settings) as worker:
         if "space_id" not in manifest:
             manifest["space_id"] = client.post(
                 "/api/spaces", json={"content": suite["name"]}
@@ -87,6 +88,7 @@ def main():
                 mid = response.json()["id"]
                 manifest["assets"][key] = {**spec, "id": mid, "preparation_state": "pending"}
                 save(manifest_path, manifest)
+            worker.drain()
             base = f"/api/spaces/{space}/materials/{mid}"
             client.put(
                 base + "/source",
@@ -98,6 +100,7 @@ def main():
             if spec.get("transcribe"):
                 if store.media(space, mid)["transcript_state"] != "ready":
                     client.post(base + "/transcribe").raise_for_status()
+                    worker.drain()
                 info = store.media(space, mid)
                 if info["transcript_state"] != "ready":
                     raise SystemExit("转写失败：" + str(info.get("transcript_error")))

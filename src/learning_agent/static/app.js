@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2,'0')}`;
-let indexPoll=null, outlineMaterial='', feedbackDraft=null, feedbackStarter='';
+let indexPoll=null, jobsPoll=null, jobsSignature='', outlineMaterial='', feedbackDraft=null, feedbackStarter='';
 const feedbackNames={stuck:'这一步没懂',example:'换个例子',restate:'我来复述',understood:'这一点明白了'};
 const approachNames={clarify:'澄清卡点',prerequisite:'补前置知识',step_by_step:'拆开推导',example:'数值例子',analogy:'类比',source_check:'核对资料',check_restatement:'检查复述',explain:'解释概念',acknowledge:'确认反馈'};
 let space='', conversation='', configured=false, busy=false, focus=null, media=null, poll=null, asr='disabled';
@@ -65,6 +65,7 @@ async function loadSpace(reset=false) {
   const conversations=space?await api(`/spaces/${space}/conversations`):[];
   $('conversations').innerHTML=conversations.map(c=>`<option value="${c.id}">${esc(c.title||'新会话 '+c.id.slice(0,8))}</option>`).join('');
   await refreshIndex();
+  await refreshJobs();
   conversation=conversations.find(c=>c.id===conversation)?.id||conversations[0]?.id||'';$('conversations').value=conversation;await loadChat();
 }
 async function loadChat() {
@@ -136,15 +137,16 @@ async function showMedia(id,start=0,end=null) {
   selectClip();await refreshMedia();$('media-reader').scrollIntoView({behavior:'smooth',block:'start'});
 }
 async function refreshMedia() {
+  clearTimeout(poll);
   if(!media)return;
   const id=media.material_id, info=await api(`/spaces/${space}/materials/${id}/media`);
   if(media?.material_id!==id)return;
   const wasReady=media.state==='ready', wasTranscribing=media.transcript_state==='running';media=info;
   const materialButton=$('materials').querySelector(`[data-material="${id}"]`);
   if(materialButton)materialButton.textContent=info.name+' · '+({ready:'可回放',processing:'准备中',failed:'准备失败'}[info.state]||info.state);
-  $('media-state').textContent=`回放：${{ready:'就绪',processing:'正在准备',failed:'失败'}[info.state]}${info.error?' · '+info.error:''}；字幕：${{ready:'已就绪',missing:'未提供',running:'正在转写',failed:'转写失败'}[info.transcript_state]}${info.transcript_error?' · '+info.transcript_error:''}`;
+  $('media-state').textContent=`回放：${{ready:'就绪',processing:'等待或正在准备',failed:'失败',paused:'已暂停',cancelled:'已取消'}[info.state]||info.state}${info.error?' · '+info.error:''}；字幕：${{ready:'已就绪',missing:'未提供',running:'等待或正在转写',failed:'转写失败',paused:'已暂停',cancelled:'已取消'}[info.transcript_state]||info.transcript_state}${info.transcript_error?' · '+info.transcript_error:''}${info.segment_count&&info.transcript_state!=='ready'?'；已有字幕仍可使用':''}`;
   $('retry-media').hidden=info.state!=='failed';$('transcribe').disabled=asr==='disabled'||!info.has_audio||info.transcript_state==='running';
-  $('caption-file').disabled=info.transcript_state==='running';$('caption-form').querySelector('button').disabled=info.transcript_state==='running';
+  $('caption-file').disabled=false;$('caption-form').querySelector('button').disabled=false;
   $('asr-hint').textContent=asr==='disabled'?'未配置ASR：可以上传字幕。无字幕的视频仍可看图，但不能解释未识别的讲话。':`转写方式：${asr}。仅点击后运行；云端转写会上传音频并可能计费。`;
   $('caption-source').textContent=(info.transcript_source||'没有时间字幕')+(info.alignment_notes?.length?'；有'+info.alignment_notes.length+'处ASR时间戳按可回放范围裁剪，原始时间见工具记录。':'');
   const segments=await api(`/spaces/${space}/materials/${id}/segments`);
@@ -191,9 +193,32 @@ $('retry-media').onclick=guarded(async()=>{await api(`/spaces/${space}/materials
 async function refreshIndex() {
   clearTimeout(indexPoll);if(!space){$('index-status').textContent='';return;}
   const selected=space, status=await api(`/spaces/${space}/retrieval`);if(selected!==space)return;
-  $('index-status').textContent=`段落 ${status.chunks} · 向量 ${status.embedded}/${status.chunks} · ${status.dense_ready?'语义检索就绪':status.provider==='disabled'?'未配置向量，使用关键词检索':({running:'正在准备',failed:'准备失败',pending:'待准备'}[status.state]||'待准备')}${status.error?' · '+status.error:''}`;
-  $('prepare-index').disabled=status.provider==='disabled'||status.state==='running'||busy;
-  if(status.state==='running')indexPoll=setTimeout(()=>refreshIndex().catch(e=>notice(e.message,true)),2000);
+  $('index-status').textContent=`段落 ${status.chunks} · 向量 ${status.embedded}/${status.chunks} · ${status.dense_ready?'语义检索就绪':status.provider==='disabled'?'未配置向量，使用关键词检索':({queued:'等待执行',running:'正在准备',paused:'已暂停',cancelled:'已取消',failed:'准备失败',pending:'待准备'}[status.state]||'待准备')}${status.error?' · '+status.error:''}`;
+  $('prepare-index').disabled=status.provider==='disabled'||['running','queued','paused'].includes(status.state)||busy;
+  if(['running','queued'].includes(status.state))indexPoll=setTimeout(()=>refreshIndex().catch(e=>notice(e.message,true)),2000);
+}
+async function refreshJobs() {
+  clearTimeout(jobsPoll);if(!space){jobsSignature='';$('jobs').replaceChildren();$('worker-state').textContent='请先创建资料空间';return;}
+  const selected=space, result=await api(`/spaces/${space}/jobs`);if(selected!==space)return;
+  const signature=selected+JSON.stringify(result);
+  if(signature===jobsSignature){jobsPoll=setTimeout(()=>refreshJobs().catch(e=>notice(e.message,true)),3000);return;}
+  const listed=await api(`/spaces/${selected}/materials`);if(selected!==space)return;
+  for(const m of listed){const button=$('materials').querySelector(`[data-material="${m.id}"]`);if(button&&m.media_state)button.textContent=m.name+' · '+({processing:'准备中',ready:'可回放',failed:'准备失败',paused:'已暂停',cancelled:'已取消'}[m.media_state]||m.media_state);}
+  jobsSignature=signature;
+  $('worker-state').textContent=result.worker_online?'处理进程在线':'处理进程离线；任务会保留。请在项目目录另开终端运行：uv run python -m learning_agent.worker';
+  $('jobs').replaceChildren();
+  const names={preview:'准备回放',transcribe:'语音转写',index:'准备语义检索'}, states={queued:'等待执行',running:'处理中',paused:'已暂停',failed:'失败',cancelled:'已取消',succeeded:'完成'};
+  for(const job of result.jobs.slice(0,15)) {
+    const row=document.createElement('div'), title=document.createElement('small');
+    const name=job.material_id?$('materials').querySelector(`[data-material="${job.material_id}"]`)?.textContent?.split(' · ')[0]:'';
+    title.textContent=`${name?name+' · ':''}${names[job.kind]}：${states[job.state]}${job.pause_requested&&job.state==='running'?'，等待当前步骤结束':''}${job.kind==='index'&&job.state==='running'?'，段落 '+job.completed+'/'+job.total:''}${job.error?' · '+job.error:''}`;row.append(title);
+    const actions=job.state==='queued'||job.state==='running'?['pause','cancel']:job.state==='paused'?['resume','cancel']:job.state==='failed'?['retry','cancel']:[];
+    for(const action of actions){const b=document.createElement('button');b.type='button';b.textContent=({pause:'暂停',cancel:'取消',resume:'继续',retry:job.error?.includes('remote_result_unknown')?'知晓可能再次计费后重试':'重试'})[action];b.disabled=action==='pause'&&Boolean(job.pause_requested);
+      b.onclick=guarded(async()=>{b.disabled=true;await api(`/jobs/${job.id}/${action}`,{method:'POST'});await refreshJobs();await refreshMedia();await refreshIndex();});row.append(b);}
+    $('jobs').append(row);
+  }
+  if(!result.jobs.length)$('jobs').textContent='还没有后台任务';
+  jobsPoll=setTimeout(()=>refreshJobs().catch(e=>notice(e.message,true)),3000);
 }
 async function showOutline(id,start=0) {
   const selected=space, result=await api(`/spaces/${space}/materials/${id}/outline?start=${start}`);if(selected!==space)return;

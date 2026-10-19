@@ -130,7 +130,7 @@ def test_index_api_navigation_source_validation_and_bounded_chunks(tmp_path):
         ).json()["id"]
         base = f"/api/spaces/{space}"
         assert client.get(base + "/retrieval").json()["chunks"] == 4
-        assert client.post(base + "/retrieval").status_code == 202
+        assert client.post(base + "/retrieval").status_code == 503
         assert client.get(base + "/retrieval").json()["provider"] == "disabled"
         assert client.get(base + f"/materials/{m}/outline?start=-1").status_code == 422
         assert (
