@@ -39,10 +39,23 @@ class Store:
                     material_id TEXT NOT NULL, seq INTEGER NOT NULL,
                     start REAL NOT NULL, end REAL NOT NULL, text TEXT NOT NULL,
                     PRIMARY KEY(material_id,seq));
+                CREATE TABLE IF NOT EXISTS material_index (
+                    material_id TEXT PRIMARY KEY, revision INTEGER, version INTEGER);
+                CREATE TABLE IF NOT EXISTS chunks (
+                    chunk_id TEXT PRIMARY KEY, material_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL, payload TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS chunks_material ON chunks(material_id, ordinal);
+                CREATE TABLE IF NOT EXISTS chunk_vectors (
+                    chunk_id TEXT NOT NULL, encoder TEXT NOT NULL, vector TEXT NOT NULL,
+                    PRIMARY KEY(chunk_id,encoder));
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(materials)")}
             if "format" not in columns:
                 db.execute("ALTER TABLE materials ADD COLUMN format TEXT NOT NULL DEFAULT 'text'")
+            if "revision" not in columns:
+                db.execute("ALTER TABLE materials ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+            if "source" not in columns:
+                db.execute("ALTER TABLE materials ADD COLUMN source TEXT NOT NULL DEFAULT '{}'")
 
     @contextmanager
     def connect(self):
@@ -295,6 +308,7 @@ class Store:
             if state == "running" and not from_job:
                 raise MediaError("正在转写，请等待结束后再上传字幕，避免相互覆盖")
             db.execute("DELETE FROM transcript_segments WHERE material_id=?", (material_id,))
+            self.invalidate_index(db, material_id)
             db.executemany(
                 "INSERT INTO transcript_segments VALUES (?,?,?,?,?)",
                 [(material_id, i, s["start"], s["end"], s["text"]) for i, s in enumerate(segments)],
@@ -314,6 +328,23 @@ class Store:
                 "UPDATE media SET metadata=? WHERE material_id=?",
                 (json.dumps(metadata), material_id),
             )
+
+    @staticmethod
+    def invalidate_index(db, material_id):
+        db.execute(
+            "DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT chunk_id FROM chunks WHERE material_id=?)",
+            (material_id,),
+        )
+        db.execute("DELETE FROM chunks WHERE material_id=?", (material_id,))
+        db.execute("DELETE FROM material_index WHERE material_id=?", (material_id,))
+        db.execute("UPDATE materials SET revision=revision+1 WHERE id=?", (material_id,))
+
+    def set_source(self, space_id, material_id, source):
+        self.material(space_id, material_id)
+        with self.connect() as db:
+            db.execute("UPDATE materials SET source=? WHERE id=?", (json.dumps(source), material_id))
+            self.invalidate_index(db, material_id)
+        return source
 
     def transcribe_media(self, space_id, material_id, settings):
         from learning_agent.media import MediaError, transcribe

@@ -1,0 +1,476 @@
+"""Persistent source-aligned chunks, BM25 and dense rank fusion for small local courses."""
+
+import json
+import math
+import re
+import threading
+import unicodedata
+from collections import Counter
+from uuid import NAMESPACE_URL, uuid5
+
+import httpx
+
+from learning_agent.config import Settings
+
+INDEX_VERSION = 2
+
+
+def tokenize(text):
+    words = re.findall(
+        r"[a-z0-9_]+|[\u3400-\u9fff]+", unicodedata.normalize("NFKC", text).casefold()
+    )
+    tokens = []
+    for word in words:
+        if re.fullmatch(r"[\u3400-\u9fff]+", word):
+            tokens.extend(
+                word if len(word) == 1 else [word[i : i + 2] for i in range(len(word) - 1)]
+            )
+        else:
+            tokens.append(word)
+    return tokens
+
+
+def bm25(query, texts):
+    documents = [Counter(tokenize(text)) for text in texts]
+    lengths = [sum(doc.values()) for doc in documents]
+    average = sum(lengths) / max(1, len(lengths)) or 1
+    frequencies = Counter(word for doc in documents for word in doc)
+    scores = []
+    for doc, length in zip(documents, lengths):
+        score = 0
+        for word in set(tokenize(query)):
+            frequency = doc[word]
+            if frequency:
+                idf = math.log(
+                    1 + (len(documents) - frequencies[word] + 0.5) / (frequencies[word] + 0.5)
+                )
+                score += (
+                    idf * frequency * 2.2 / (frequency + 1.2 * (0.25 + 0.75 * length / average))
+                )
+        scores.append(score)
+    return scores
+
+
+def fuse(*rankings, k=60):
+    scores = Counter()
+    for ranking in rankings:
+        for rank, index in enumerate(ranking, 1):
+            scores[index] += 1 / (k + rank)
+    return sorted(scores, key=lambda i: (-scores[i], i)), scores
+
+
+class EmbeddingError(Exception):
+    pass
+
+
+class Embedder:
+    def __init__(self, settings):
+        self.settings = settings
+        self.key = json.dumps(
+            [
+                settings.embedding_provider,
+                settings.embedding_base_url.rstrip("/"),
+                settings.embedding_model,
+            ]
+        )
+
+    def embed(self, texts):
+        s = self.settings
+        if s.embedding_provider == "disabled":
+            raise EmbeddingError("embedding_disabled")
+        path = "/api/embed" if s.embedding_provider == "ollama" else "/embeddings"
+        payload = {"model": s.embedding_model, "input": texts}
+        if s.embedding_provider == "ollama":
+            payload["truncate"] = False
+        headers = {}
+        if s.embedding_api_key.get_secret_value():
+            headers["Authorization"] = "Bearer " + s.embedding_api_key.get_secret_value()
+        try:
+            with httpx.Client(timeout=s.embedding_timeout_seconds) as client:
+                response = client.post(
+                    s.embedding_base_url.rstrip("/") + path, json=payload, headers=headers
+                )
+                response.raise_for_status()
+                body = response.json()
+            if s.embedding_provider == "ollama":
+                vectors = body["embeddings"]
+            else:
+                rows = sorted(body["data"], key=lambda r: r["index"])
+                if [row["index"] for row in rows] != list(range(len(texts))):
+                    raise ValueError("invalid indices")
+                vectors = [row["embedding"] for row in rows]
+            if len(vectors) != len(texts) or not vectors:
+                raise ValueError("invalid count")
+            dimension = len(vectors[0])
+            normalized = []
+            for vector in vectors:
+                if (
+                    not dimension
+                    or len(vector) != dimension
+                    or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in vector)
+                ):
+                    raise ValueError("invalid vector")
+                norm = math.sqrt(sum(x * x for x in vector))
+                if not norm:
+                    raise ValueError("zero vector")
+                normalized.append([x / norm for x in vector])
+            return normalized
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
+            # Never return upstream bodies, request headers, keys or private text in errors.
+            raise EmbeddingError("embedding_request_failed:" + type(error).__name__) from None
+
+
+class CourseIndex:
+    def __init__(self, store):
+        self.store = store
+
+    def _build(self, material):
+        space, mid = material["space_id"], material["id"]
+        source = json.loads(material["source"])
+        chunks = []
+        provenance = {}
+        if material["format"] in {"audio", "video"}:
+            info = self.store.media(space, mid)
+            provenance = {
+                "transcript_source": info["transcript_source"],
+                "transcript_state": info["transcript_state"],
+            }
+
+        def add(text, **position):
+            if not text.strip():
+                return
+            if len(text) > 1200:
+                for offset in range(0, len(text), 1000):
+                    add(text[offset : offset + 1000], **position, excerpt_char_offset=offset)
+                return
+            ordinal = len(chunks)
+            chunk = {
+                "chunk_id": str(
+                    uuid5(NAMESPACE_URL, f"{mid}:{material['revision']}:{INDEX_VERSION}:{ordinal}")
+                ),
+                "id": mid,
+                "material_id": mid,
+                "name": material["name"],
+                "format": material["format"],
+                "ordinal": ordinal,
+                "excerpt": text,
+                **provenance,
+                **position,
+            }
+            if source:
+                chunk["source"] = source
+                if "start_seconds" in chunk:
+                    offset = source.get("start_seconds", 0)
+                    chunk["original_start_seconds"] = offset + chunk["start_seconds"]
+                    chunk["original_end_seconds"] = offset + chunk["end_seconds"]
+            if position.get("page"):
+                chunk["page_url"] = (
+                    f"/api/spaces/{space}/materials/{mid}/pages/{position['page']}/image"
+                )
+            if "start_seconds" in position:
+                chunk["source_url"] = (
+                    f"/#media={mid}&start={position['start_seconds']}&end={position['end_seconds']}"
+                )
+            chunks.append(chunk)
+
+        if material["format"] in {"audio", "video"}:
+            group = []
+            for segment in self.store.segments(space, mid):
+                if group and (
+                    segment["end"] - group[0]["start"] > 45
+                    or sum(len(s["text"]) for s in group) + len(segment["text"]) > 1000
+                    or segment["start"] - group[-1]["end"] > 4
+                ):
+                    add(
+                        "\n".join(s["text"] for s in group),
+                        start_seconds=group[0]["start"],
+                        end_seconds=max(s["end"] for s in group),
+                    )
+                    group = []
+                # A single uploaded cue can exceed the regular chunk span. Keep its source interval honest.
+                group.append(segment)
+            if group:
+                add(
+                    "\n".join(s["text"] for s in group),
+                    start_seconds=group[0]["start"],
+                    end_seconds=max(s["end"] for s in group),
+                )
+        else:
+            pages = (
+                self.store.pages(space, mid) if material["format"] == "pdf" else [{"page": None}]
+            )
+            for page in pages:
+                text = (
+                    self.store.page(space, mid, page["page"])["text"]
+                    if page["page"]
+                    else material["text"]
+                )
+                lines = text.splitlines()
+                start = 0
+                while start < len(lines):
+                    end, size = start, 0
+                    while end < len(lines) and end - start < 18:
+                        if end > start and (
+                            size + len(lines[end]) > 1000 or lines[end].startswith("#")
+                        ):
+                            break
+                        size += len(lines[end])
+                        end += 1
+                    add(
+                        "\n".join(lines[start:end]),
+                        page=page["page"],
+                        start_line=start + 1,
+                        end_line=end,
+                    )
+                    start = end
+        return chunks
+
+    def chunks(self, space_id, material_id=None):
+        materials = self.store.materials(space_id)
+        if material_id:
+            self.store.material(space_id, material_id)
+            materials = [m for m in materials if m["id"] == material_id]
+        for item in materials:
+            # Snapshot revision before reading mutable captions; validate again while publishing.
+            for _ in range(2):
+                material = self.store.material(space_id, item["id"])
+                with self.store.connect() as db:
+                    state = db.execute(
+                        "SELECT revision,version FROM material_index WHERE material_id=?",
+                        (item["id"],),
+                    ).fetchone()
+                if state and tuple(state) == (material["revision"], INDEX_VERSION):
+                    break
+                chunks = self._build(material)
+                with self.store.connect() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    revision = db.execute(
+                        "SELECT revision FROM materials WHERE id=?", (item["id"],)
+                    ).fetchone()[0]
+                    if revision != material["revision"]:
+                        continue
+                    current = db.execute(
+                        "SELECT revision,version FROM material_index WHERE material_id=?",
+                        (item["id"],),
+                    ).fetchone()
+                    if current and tuple(current) == (revision, INDEX_VERSION):
+                        break
+                    db.execute(
+                        "DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT chunk_id FROM chunks WHERE material_id=?)",
+                        (item["id"],),
+                    )
+                    db.execute("DELETE FROM chunks WHERE material_id=?", (item["id"],))
+                    db.executemany(
+                        "INSERT INTO chunks VALUES (?,?,?,?)",
+                        [
+                            (
+                                c["chunk_id"],
+                                item["id"],
+                                c["ordinal"],
+                                json.dumps(c, ensure_ascii=False),
+                            )
+                            for c in chunks
+                        ],
+                    )
+                    db.execute(
+                        "INSERT OR REPLACE INTO material_index VALUES (?,?,?)",
+                        (item["id"], revision, INDEX_VERSION),
+                    )
+                break
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT c.payload FROM chunks c JOIN materials m ON m.id=c.material_id WHERE m.space_id=?"
+                + (" AND m.id=?" if material_id else "")
+                + " ORDER BY m.rowid,c.ordinal",
+                (space_id, material_id) if material_id else (space_id,),
+            )
+            return [json.loads(row[0]) for row in rows]
+
+    def context(self, space, chunk_id, before, after):
+        chunks = self.chunks(space)
+        anchor = next((c for c in chunks if c["chunk_id"] == chunk_id), None)
+        if not anchor:
+            raise LookupError("段落不存在或字幕已更新，请重新搜索")
+        neighbors = [
+            c
+            for c in chunks
+            if c["id"] == anchor["id"]
+            and anchor["ordinal"] - before <= c["ordinal"] <= anchor["ordinal"] + after
+        ]
+        return {
+            "anchor_chunk_id": chunk_id,
+            "chunks": neighbors,
+            "detail": "仅返回这些段落原文；PDF公式/图表需另行看图，视频需按返回时间抽样或回听。",
+        }
+
+    def outline(self, space, material_id, start, limit):
+        material = self.store.material(space, material_id)
+        chunks = self.chunks(space, material_id)
+        entries = {}
+        for c in chunks:
+            key = c.get("page") or (
+                int(c["start_seconds"] // 300) if "start_seconds" in c else c["ordinal"]
+            )
+            if key not in entries:
+                entries[key] = {
+                    k: v for k, v in c.items() if k not in {"excerpt", "source_url", "page_url"}
+                }
+                entries[key]["label"] = c["excerpt"].strip().splitlines()[0][:100]
+            if "end_seconds" in c:
+                entries[key]["end_seconds"] = c["end_seconds"]
+        if material["format"] == "pdf":
+            for page in self.store.pages(space, material_id):
+                if page["page"] not in entries:
+                    entries[page["page"]] = {
+                        "page": page["page"],
+                        "chunk_id": None,
+                        "label": "无可提取文字，需查看页面图像",
+                    }
+            entries = dict(sorted(entries.items()))
+        elif material["format"] in {"audio", "video"}:
+            info = self.store.media(space, material_id)
+            for key in range(math.ceil(info["duration"] / 300)):
+                if key not in entries:
+                    entries[key] = {
+                        "start_seconds": key * 300,
+                        "end_seconds": min((key + 1) * 300, info["duration"]),
+                        "chunk_id": None,
+                        "label": "此时间组无可检索字幕，可按需抽样查看画面",
+                    }
+            entries = dict(sorted(entries.items()))
+        rows = list(entries.values())
+        return {
+            "material_id": material_id,
+            "name": material["name"],
+            "entries": rows[start : start + limit],
+            "total": len(rows),
+            "next_start": start + limit if start + limit < len(rows) else None,
+            "navigation_kind": "page_first_line"
+            if material["format"] == "pdf"
+            else "five_minute_groups"
+            if material["format"] in {"audio", "video"}
+            else "text_sections",
+            "detail": "目录标签来自原文首行；时间分组不是模型识别的语义章节，也不代表已读取对应完整内容。",
+        }
+
+
+class Retriever:
+    def __init__(self, store, settings=None, embedder=None):
+        self.store = store
+        self.settings = settings or Settings(_env_file=None)
+        self.index = CourseIndex(store)
+        self.embedder = embedder or Embedder(self.settings)
+        self.lock = threading.Lock()
+        self.jobs = {}
+
+    def vectors(self, chunks):
+        ids = {c["chunk_id"] for c in chunks}
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT chunk_id,vector FROM chunk_vectors WHERE encoder=?", (self.embedder.key,)
+            )
+            return {r[0]: json.loads(r[1]) for r in rows if r[0] in ids}
+
+    def status(self, space):
+        chunks = self.index.chunks(space)
+        count = len(self.vectors(chunks))
+        return {
+            "chunks": len(chunks),
+            "embedded": count,
+            "provider": self.settings.embedding_provider,
+            "model": self.settings.embedding_model,
+            "state": self.jobs.get(space, {}).get("state")
+            if self.jobs.get(space, {}).get("state") in {"running", "failed", "disabled"}
+            else "ready"
+            if count == len(chunks) and chunks
+            else "pending",
+            "error": self.jobs.get(space, {}).get("error"),
+            "dense_ready": bool(chunks)
+            and count == len(chunks)
+            and self.settings.embedding_provider != "disabled",
+        }
+
+    def prepare(self, space):
+        # Single local process. Multiple queued requests are coalesced by checking persisted vectors.
+        with self.lock:
+            self.jobs[space] = {"state": "running"}
+            try:
+                chunks = self.index.chunks(space)
+                vectors = self.vectors(chunks)
+                pending = [c for c in chunks if c["chunk_id"] not in vectors]
+                if self.settings.embedding_provider == "disabled":
+                    self.jobs[space] = {"state": "disabled"}
+                    return
+                for start in range(0, len(pending), 16):
+                    batch = pending[start : start + 16]
+                    embedded = self.embedder.embed([c["excerpt"] for c in batch])
+                    with self.store.connect() as db:
+                        for chunk, vector in zip(batch, embedded):
+                            # Caption updates may have invalidated this batch during inference.
+                            if db.execute(
+                                "SELECT 1 FROM chunks WHERE chunk_id=?", (chunk["chunk_id"],)
+                            ).fetchone():
+                                db.execute(
+                                    "INSERT OR REPLACE INTO chunk_vectors VALUES (?,?,?)",
+                                    (chunk["chunk_id"], self.embedder.key, json.dumps(vector)),
+                                )
+                self.jobs[space] = {"state": "ready"}
+            except EmbeddingError as error:
+                self.jobs[space] = {"state": "failed", "error": str(error)}
+
+    def search(self, space, query, material_id=None):
+        chunks = self.index.chunks(space, material_id)
+        if not chunks:
+            return {"hits": [], "retrieval": "bm25", "dense_status": "no_searchable_text"}
+        scores = bm25(query, [c["excerpt"] for c in chunks])
+        lexical = sorted(
+            (i for i, score in enumerate(scores) if score > 0), key=lambda i: (-scores[i], i)
+        )
+        ranking, fused = lexical, {}
+        mode, dense_status = "bm25", "not_requested"
+        dense_ranks = {}
+        if self.settings.retrieval_mode == "hybrid":
+            vectors = self.vectors(chunks)
+            dense_status = (
+                "disabled" if self.settings.embedding_provider == "disabled" else "index_incomplete"
+            )
+            if len(vectors) == len(chunks) and self.settings.embedding_provider != "disabled":
+                try:
+                    vector = self.embedder.embed([query])[0]
+                    if any(len(v) != len(vector) for v in vectors.values()):
+                        raise EmbeddingError(
+                            "embedding_dimension_changed:rebuild_with_new_model_id"
+                        )
+                    similarities = [
+                        sum(a * b for a, b in zip(vector, vectors[c["chunk_id"]])) for c in chunks
+                    ]
+                    dense = sorted(range(len(chunks)), key=lambda i: (-similarities[i], i))[:30]
+                    dense_ranks = {i: rank for rank, i in enumerate(dense, 1)}
+                    ranking, fused = fuse(lexical[:30], dense)
+                    mode, dense_status = "hybrid_rrf", "ready"
+                except EmbeddingError as error:
+                    dense_status = str(error)
+        hits, per_page = [], Counter()
+        lexical_ranks = {i: rank for rank, i in enumerate(lexical, 1)}
+        for i in ranking:
+            chunk = chunks[i]
+            key = (chunk["id"], chunk.get("page") or chunk["ordinal"])
+            if per_page[key] >= 2:
+                continue
+            per_page[key] += 1
+            hits.append(
+                {
+                    **chunk,
+                    "score": fused.get(i, scores[i]),
+                    "bm25_rank": lexical_ranks.get(i),
+                    "dense_rank": dense_ranks.get(i),
+                }
+            )
+            if len(hits) == 5:
+                break
+        return {
+            "hits": hits,
+            "retrieval": mode,
+            "dense_status": dense_status,
+            "detail": "排名是候选线索，不是正确性置信度。可改写查询、限定资料、读取相邻段落或查看目录。",
+        }

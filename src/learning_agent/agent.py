@@ -3,6 +3,7 @@ import json
 import time
 
 from learning_agent.provider import ModelError
+from learning_agent.retrieval import Retriever
 from learning_agent.tools import MaterialTools, definitions
 
 INSTRUCTIONS = """你是帮助用户学懂内容的学习 Agent。优先准确、清晰地解释当前困惑。
@@ -23,11 +24,16 @@ PDF引用用[资料名:p页码]，文字用行号。不能把页内文字推断�
 无字幕不能编造口述内容；没有画面不能声称看见。字幕和画面不一致时说明差异，不强行合并。
 每张附加图片前的标签指明资料和时间/页码，按相邻标签对应图像。先讲清楚，再提供值得回听的具体时间段。
 检索无结果可以调整关键词或查看目录再阅读，不能把词法未匹配等同于资料不存在。
+长课程可先material_outline定位范围；搜索命中缺前提时read_context读取前后段，再决定是否需要整页或画面。
+可改写查询或限定material_id交叉核对。RRF分数不是正确概率，向量降级也不是资料不存在。
+媒体引用与inspect_media参数始终使用当前文件的相对时间；original_start_seconds是原视频偏移映射，不能用于当前播放器。
 资料不足时说明不足，仍可明确标明地补充通用解释。没有理解反馈不能断言用户已掌握。
 工具调用有预算，在足够解释时交付答案；最终回答优先讲解，不以链接代替回答。"""
 
 
-async def run_turn(store, provider, settings, conversation_id, question, focus=None):
+async def run_turn(
+    store, provider, settings, conversation_id, question, focus=None, retriever=None
+):
     conversation = store.get_conversation(conversation_id)
     run_id = store.start_run(conversation_id, question)
     question_context = question
@@ -43,7 +49,12 @@ async def run_turn(store, provider, settings, conversation_id, question, focus=N
         content = "当前会话上下文已达到初版限制，请新建会话继续。原会话和资料仍保留。"
         store.finish_run(run_id, "failed", content, conversation["protocol"], "context_limit")
         return {"run_id": run_id, "state": "failed", "answer": content}
-    tools = MaterialTools(store, conversation["space_id"], settings.enable_vision)
+    tools = MaterialTools(
+        store,
+        conversation["space_id"],
+        settings.enable_vision,
+        retriever or Retriever(store, settings),
+    )
     events, seen, calls_used, images_used = [], set(), 0, 0
     started = time.monotonic()
     error = None

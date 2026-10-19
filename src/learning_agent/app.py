@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 from learning_agent.agent import run_turn
 from learning_agent.config import Settings
@@ -13,6 +13,7 @@ from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
 from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
 from learning_agent.references import resolve_references
+from learning_agent.retrieval import Retriever
 from learning_agent.store import Store
 
 
@@ -51,9 +52,15 @@ class Question(Text):
     focus: Focus | None = None
 
 
+class Source(BaseModel):
+    url: HttpUrl | None = Field(default=None, max_length=2048)
+    start_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
+
+
 def create_app(settings=None, provider=None):
     settings = settings or Settings()
     store = Store(settings.data_root)
+    retriever = Retriever(store, settings)
     store.recover_media()
     model = provider or OpenAIProvider(settings)
     app = FastAPI(title="Learning Agent · 多模态学习讲解")
@@ -85,7 +92,8 @@ def create_app(settings=None, provider=None):
             "vision": settings.enable_vision,
             "video": True,
             "asr_provider": settings.asr_provider,
-            "retrieval": "lexical_baseline",
+            "retrieval": settings.retrieval_mode,
+            "embedding_provider": settings.embedding_provider,
             "verification": "inspect_actual_run_results",
         }
 
@@ -102,6 +110,29 @@ def create_app(settings=None, provider=None):
     @app.get("/api/spaces/{space_id}/materials")
     async def materials(space_id: str):
         return store.materials(space_id)
+
+    @app.get("/api/spaces/{space_id}/retrieval")
+    async def retrieval_status(space_id: str):
+        return await asyncio.to_thread(retriever.status, space_id)
+
+    @app.post("/api/spaces/{space_id}/retrieval", status_code=202)
+    async def prepare_index(space_id: str, background_tasks: BackgroundTasks):
+        store.require_space(space_id)
+        background_tasks.add_task(retriever.prepare, space_id)
+        return {"state": "queued"}
+
+    @app.get("/api/spaces/{space_id}/materials/{material_id}/outline")
+    async def outline(space_id: str, material_id: str, start: int = 0):
+        if start < 0:
+            raise HTTPException(422, "目录偏移不能为负")
+        return await asyncio.to_thread(retriever.index.outline, space_id, material_id, start, 30)
+
+    @app.put("/api/spaces/{space_id}/materials/{material_id}/source")
+    async def set_source(space_id: str, material_id: str, payload: Source):
+        material = store.material(space_id, material_id)
+        if payload.start_seconds and material["format"] not in {"audio", "video"}:
+            raise HTTPException(422, "原始时间偏移仅适用于音视频")
+        return store.set_source(space_id, material_id, payload.model_dump(mode="json"))
 
     @app.post("/api/spaces/{space_id}/materials", status_code=201)
     async def upload(
@@ -236,7 +267,9 @@ def create_app(settings=None, provider=None):
         if provider is None and not settings.api_key.get_secret_value():
             raise HTTPException(503, "请在本机 .env 中配置 LA_API_KEY；当前不会调用模型。")
         try:
-            return await run_turn(store, model, settings, conversation_id, payload.content, focus)
+            return await run_turn(
+                store, model, settings, conversation_id, payload.content, focus, retriever
+            )
         except sqlite3.IntegrityError:
             raise HTTPException(409, "该会话正在回答，请等待完成后再发送。") from None
 

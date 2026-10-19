@@ -1,0 +1,37 @@
+{
+  "name": "长课程盲定位与联合讲解",
+  "assets": {
+    "cs_pdf": {"path": "data/acceptance/real-courses/cs336-architecture.pdf", "source_url": "https://cs336.stanford.edu/spring2025/"},
+    "ntu_pdf": {"path": "data/acceptance/real-courses/ntu-ai-agent.pdf", "source_url": "https://speech.ee.ntu.edu.tw/~hylee/ml/2025-spring.php"},
+    "cs_video": {"path": "data/acceptance/real-courses/cs336-first45min.mp4", "transcribe": true, "source_url": "https://www.youtube.com/watch?v=ptFiH_bHnJw", "source_start_seconds": 0, "source_end_seconds": 2700},
+    "ntu_video": {"path": "data/acceptance/real-courses/ntu-45to75min.mp4", "captions": "data/acceptance/real-courses/ntu-45to75min.vtt", "source_url": "https://www.youtube.com/watch?v=M2Yg1kwPpts", "source_start_seconds": 2700, "source_end_seconds": 4500}
+  },
+  "queries": [
+    {"id": "pre_norm_zh", "question": "CS336为什么把归一化放在子层之前，残差通路具体保留了什么？", "expected": [{"asset": "cs_pdf", "pages": [10,11,12]}, {"asset": "cs_video", "seconds": [353,551]}]},
+    {"id": "runtime_zh", "question": "CS336课程里说归一化计算很少却很耗时，是什么原因？不要把运算次数占比当成速度。", "expected": [{"asset": "cs_pdf", "pages": [15,16,17]}]},
+    {"id": "rms_zh", "question": "CS336中RMSNorm和LayerNorm到底少做了什么，课件图上的公式如何理解？", "expected": [{"asset": "cs_pdf", "pages": [13,14]}]},
+    {"id": "gating_zh", "question": "CS336为什么在前馈层里引入门控，不就是把线性层加深吗？", "expected": [{"asset": "cs_pdf", "pages": [21,22,23]}]},
+    {"id": "rope_zh", "question": "CS336在注意力里怎么让模型区分词的前后位置，旋转编码如何起作用？", "expected": [{"asset": "cs_pdf", "pages": [31,32,33]}]},
+    {"id": "norm_en", "question": "Why does pre-normalization preserve a direct residual gradient path in the CS336 architecture?", "expected": [{"asset": "cs_pdf", "pages": [10,11,12]}, {"asset": "cs_video", "seconds": [353,551]}]},
+    {"id": "tool_zh", "question": "李宏毅课程中模型输出了工具调用文字，就算已经调用外部程序了吗？是谁真正执行？", "expected": [{"asset": "ntu_pdf", "pages": [49,50]}, {"asset": "ntu_video", "seconds": [330,600]}]},
+    {"id": "tool_en", "question": "Who actually executes the temperature function after the language model prints a tool tag in the lecture?", "expected": [{"asset": "ntu_pdf", "pages": [49,50]}, {"asset": "ntu_video", "seconds": [330,600]}]},
+    {"id": "bad_tool_zh", "question": "工具返回离谱的温度时，为什么模型有时会照抄、有时又质疑？这能保证它每次发现错误吗？", "expected": [{"asset": "ntu_pdf", "pages": [61,62]}]},
+    {"id": "bad_tool_en", "question": "When an external observation reports an absurd temperature, does the language model automatically reject it? Explain the lecture's contrasting examples.", "expected": [{"asset": "ntu_pdf", "pages": [61,62]}]},
+    {"id": "absent_hardware", "question": "CS336这份课程中，RMSNorm在A100上比LayerNorm精确快多少毫秒？", "expected": [], "note": "无支持精确硬件与毫秒差的证据；有相近主题候选不等于可回答。"},
+    {"id": "absent_weather", "question": "这份课程能告诉我今天台北实际气温吗？", "expected": [], "note": "课中工具示例不是实时天气数据。"}
+  ],
+  "cases": [
+    {"id": "compute_vs_runtime", "turns": [
+      {"question": "请结合CS336课程和讲义，讲清楚为什么归一化计算很少却很耗时。我总把运算次数的占比理解成运行时间占比，也请给我一个值得回听的片段。", "rubric": "区分FLOPs/时间/访存与带宽；正确解释讲义99.80/61.0、0.17/25.5口径；若给视频须实际查阅且相关，不能把153当秒。"},
+      {"question": "那这能说明RMSNorm在A100上比LayerNorm精确快多少毫秒吗？没有直接数据就告诉我还缺什么。", "rubric": "不编造硬件或毫秒差；3.50/3.68是训练吞吐，不能当孤立算子的A100实测。"}
+    ]},
+    {"id": "residual_explanation", "turns": [
+      {"question": "请结合CS336的讲义和视频解释：归一化放在子层之前和之后，残差通路究竟有什么不同？我想理解式子，不想背结论。请找到适合回听的片段。", "rubric": "实际定位pre/post结构；pre=x+F(LN(x))，post=LN(x+F(x))；看图后才声称看图；解释直接路径，视频相关。"},
+      {"question": "假设子层暂时输出0，输入是[1,3]，这两种顺序分别会得到什么？忽略epsilon，归一化参数按默认值；也说一下这个例子的局限。", "rubric": "pre输出[1,3]；post按LayerNorm输出[-1,1]；说明简化假设不等于完整网络/普遍训练结论。"}
+    ]},
+    {"id": "tool_execution", "turns": [
+      {"question": "李宏毅讲AI Agent时，模型写出工具调用就算执行成功了吗？请结合讲义和讲课片段，把模型、外部程序、返回结果分别做什么讲清楚，并给我回听的位置。", "rubric": "区分生成调用、运行时执行、观测写回上下文与训练；实际看图/片段；不能把课中温度当实时天气。"},
+      {"question": "如果工具返回很离谱的温度，它就一定能发现吗？请找课中的对比例子，解释为什么不能仅凭这次演示就说系统可靠。", "rubric": "定位100度与10000度对比；区分照抄和质疑，不承诺固定阈值或必然发现错误；解释观察仅是示例。"}
+    ]}
+  ]
+}

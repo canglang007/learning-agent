@@ -85,7 +85,8 @@ def test_time_captions_frames_playback_range_and_scope(tmp_path, clip):
             pixel = decoded.getpixel((50, 50))
             assert pixel[channel] > 240 and sum(pixel) < 270
     hit = tools.execute("search_materials", {"query": "blue"})["hits"][0]
-    assert hit["start_seconds"] == 2 and "#media=" in hit["source_url"]
+    assert hit["start_seconds"] <= 2 and hit["end_seconds"] >= 4
+    assert "blue example" in hit["excerpt"] and "#media=" in hit["source_url"]
     assert client.get(base + "/playback", headers={"Range": "bytes=0-99"}).status_code == 206
     other = client.post("/api/spaces", json={"content": "other"}).json()["id"]
     assert client.get(f"/api/spaces/{other}/materials/{material}/playback").status_code == 404

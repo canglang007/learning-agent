@@ -25,7 +25,7 @@ def resolve_references(answer, events, space_id=None):
     ]
     # Search excerpts are observations too; they do not imply a whole page/image was read.
     for observation in list(observations):
-        for hit in observation.get("hits", []):
+        for hit in [*observation.get("hits", []), *observation.get("chunks", [])]:
             if hit.get("id") and hit.get("name"):
                 excerpt = {**hit, "material_id": hit["id"], "evidence_kind": "search_excerpt"}
                 if hit.get("page") and space_id:

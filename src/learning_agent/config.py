@@ -20,3 +20,9 @@ class Settings(BaseSettings):
     asr_model: str = "base"
     asr_base_url: str = "https://api.openai.com/v1"
     asr_api_key: SecretStr = SecretStr("")
+    retrieval_mode: Literal["lexical_baseline", "bm25", "hybrid"] = "hybrid"
+    embedding_provider: Literal["disabled", "ollama", "compatible"] = "disabled"
+    embedding_base_url: str = "http://localhost:11434"
+    embedding_model: str = "bge-m3:latest"
+    embedding_api_key: SecretStr = SecretStr("")
+    embedding_timeout_seconds: float = Field(default=30, gt=0, le=180)

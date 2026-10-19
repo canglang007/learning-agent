@@ -62,6 +62,8 @@ def test_pdf_preserves_pages_search_and_raster_only_page(tmp_path):
     tools = MaterialTools(Store(tmp_path), space)
     hit = tools.execute("search_materials", {"query": "chain rule"})["hits"][0]
     assert hit["page"] == 1
+    nav = tools.execute("material_outline", {"material_id": material})
+    assert len(nav["entries"]) == 2 and nav["entries"][1]["chunk_id"] is None
     assert tools.execute("read_page", {"material_id": material, "page": 2})["has_text"] is False
 
 
