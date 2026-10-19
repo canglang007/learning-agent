@@ -2,7 +2,7 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response, UploadFile
+from fastapi import FastAPI, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
@@ -17,6 +17,7 @@ from learning_agent.provider import OpenAIProvider
 from learning_agent.references import resolve_references
 from learning_agent.retrieval import Retriever
 from learning_agent.store import Store
+from learning_agent.uploads import Uploads
 
 
 class Text(BaseModel):
@@ -60,11 +61,18 @@ class Source(BaseModel):
     start_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 
+class UploadStart(BaseModel):
+    filename: str = Field(min_length=1, max_length=200)
+    size: int = Field(ge=1)
+    last_modified: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
 def create_app(settings=None, provider=None):
     settings = settings or Settings()
     store = Store(settings.data_root)
     retriever = Retriever(store, settings)
     jobs = Jobs(store)
+    uploads = Uploads(store, jobs, settings)
     model = provider or OpenAIProvider(settings)
     app = FastAPI(title="Learning Agent · 多模态学习讲解")
     app.state.store = store
@@ -107,6 +115,8 @@ def create_app(settings=None, provider=None):
             "embedding_provider": settings.embedding_provider,
             "verification": "inspect_actual_run_results",
             "worker_online": jobs.online(),
+            "media_max_bytes": settings.media_max_bytes,
+            "media_max_seconds": settings.media_max_seconds,
         }
 
     @app.get("/api/spaces")
@@ -164,23 +174,21 @@ def create_app(settings=None, provider=None):
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in {".txt", ".md", ".pdf"} | MEDIA_SUFFIXES:
             raise HTTPException(422, "支持文字、PDF、常用音频/视频格式")
-        limit = (
-            100_000_000
-            if suffix in MEDIA_SUFFIXES
-            else 20_000_000
-            if suffix == ".pdf"
-            else 2_000_000
-        )
+        if suffix in MEDIA_SUFFIXES:
+            session = uploads.create(space_id, (file.filename or "media")[:200], file.size or 0)
+            while block := await file.read(uploads.chunk_size):
+
+                async def stream():
+                    yield block
+
+                session = await uploads.append(session["id"], session["received"], stream())
+            item = await uploads.complete(session["id"])
+            response.status_code = 202
+            return item
+        limit = 20_000_000 if suffix == ".pdf" else 2_000_000
         raw = await file.read(limit + 1)
         if len(raw) > limit:
-            raise HTTPException(413, "音视频限制100 MB，PDF限制20 MB，文字资料限制2 MB")
-        if suffix in MEDIA_SUFFIXES:
-            item = await asyncio.to_thread(
-                store.add_media, space_id, (file.filename or "media")[:200], raw, suffix
-            )
-            job = jobs.enqueue("preview", space_id, settings, item["material_id"])
-            response.status_code = 202
-            return {**item, "id": item["material_id"], "job_id": job["id"]}
+            raise HTTPException(413, "PDF限制20 MB，文字资料限制2 MB")
         if suffix == ".pdf":
             try:
                 return await asyncio.to_thread(
@@ -195,6 +203,26 @@ def create_app(settings=None, provider=None):
         if not text.strip():
             raise HTTPException(422, "资料内容不能为空")
         return store.add_material(space_id, (file.filename or "material.txt")[:200], text)
+
+    @app.post("/api/spaces/{space_id}/uploads", status_code=201)
+    async def start_upload(space_id: str, payload: UploadStart):
+        return uploads.create(space_id, payload.filename, payload.size, payload.last_modified)
+
+    @app.get("/api/uploads/{upload_id}")
+    async def upload_status(upload_id: str):
+        return uploads.get(upload_id)
+
+    @app.patch("/api/uploads/{upload_id}")
+    async def upload_chunk(upload_id: str, request: Request, upload_offset: int = Header(ge=0)):
+        return await uploads.append(upload_id, upload_offset, request.stream())
+
+    @app.post("/api/uploads/{upload_id}/complete", status_code=202)
+    async def finish_upload(upload_id: str):
+        return await uploads.complete(upload_id)
+
+    @app.delete("/api/uploads/{upload_id}")
+    async def cancel_upload(upload_id: str):
+        return uploads.cancel(upload_id)
 
     @app.get("/api/spaces/{space_id}/materials/{material_id}")
     async def material(space_id: str, material_id: str):

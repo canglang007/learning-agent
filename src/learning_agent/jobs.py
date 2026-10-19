@@ -18,10 +18,14 @@ def configuration(kind, settings):
         return {"pipeline": "preview-v1"}
     if kind == "transcribe":
         return {
-            "pipeline": "whole-transcript-v1",
+            "pipeline": "parts-transcript-v2",
             "provider": settings.asr_provider,
             "model": settings.asr_model,
             "base_url": settings.asr_base_url.rstrip("/"),
+            "part_seconds": settings.asr_local_part_seconds
+            if settings.asr_provider == "local"
+            else settings.asr_api_part_seconds,
+            "context_seconds": settings.asr_context_seconds,
         }
     return {
         "pipeline": "embedding-v1",
@@ -55,6 +59,11 @@ class Jobs:
                     id INTEGER PRIMARY KEY CHECK(id=1), pid INTEGER NOT NULL,
                     heartbeat REAL NOT NULL);
             """)
+            db.execute("BEGIN IMMEDIATE")
+            columns = {r[1] for r in db.execute("PRAGMA table_info(jobs)")}
+            for column in ("processed_seconds", "total_seconds"):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE jobs ADD COLUMN {column} REAL NOT NULL DEFAULT 0")
 
     def version(self, kind, space, material=None, db=None):
         if db is None:
@@ -173,13 +182,15 @@ class Jobs:
         if row["pause_requested"] or row["cancel_requested"]:
             raise JobStopped()
 
-    def checkpoint(self, job, stage, completed=None, total=None, remote=False):
+    def checkpoint(
+        self, job, stage, completed=None, total=None, remote=False, seconds=None, duration=None
+    ):
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.check(job, db)
             db.execute(
-                "UPDATE jobs SET stage=?,completed=coalesce(?,completed),total=coalesce(?,total),remote_pending=?,updated=? WHERE id=?",
-                (stage, completed, total, int(remote), time.time(), job["id"]),
+                "UPDATE jobs SET stage=?,completed=coalesce(?,completed),total=coalesce(?,total),remote_pending=?,processed_seconds=coalesce(?,processed_seconds),total_seconds=coalesce(?,total_seconds),updated=? WHERE id=?",
+                (stage, completed, total, int(remote), seconds, duration, time.time(), job["id"]),
             )
 
     def part(self, job, key):

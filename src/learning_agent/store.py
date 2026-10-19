@@ -61,6 +61,7 @@ class Store:
                     seq INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL,
                     run_id TEXT NOT NULL, note TEXT NOT NULL);
             """)
+            db.execute("BEGIN IMMEDIATE")
             columns = {row[1] for row in db.execute("PRAGMA table_info(materials)")}
             if "format" not in columns:
                 db.execute("ALTER TABLE materials ADD COLUMN format TEXT NOT NULL DEFAULT 'text'")
@@ -204,20 +205,36 @@ class Store:
         return dict(row)
 
     def add_media(self, space_id, name, raw, suffix):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(dir=self.root, suffix=suffix) as file:
+            file.write(raw)
+            file.flush()
+            return self.add_media_file(space_id, name, Path(file.name), suffix, move=False)
+
+    def add_media_file(
+        self, space_id, name, path, suffix, material_id=None, max_seconds=14400, move=True
+    ):
         from learning_agent.media import probe
 
         self.require_space(space_id)
-        material_id = str(uuid4())
+        material_id = material_id or str(uuid4())
+        with self.connect() as db:
+            if db.execute(
+                "SELECT 1 FROM materials WHERE id=? AND space_id=?", (material_id, space_id)
+            ).fetchone():
+                return self.media(space_id, material_id)
         directory = self.root / "materials" / material_id
-        directory.mkdir()
+        directory.mkdir(exist_ok=True)
         source = directory / ("original" + suffix)
-        source.write_bytes(raw)
-        try:
-            metadata = probe(source)
-        except Exception:
-            source.unlink(missing_ok=True)
-            directory.rmdir()
-            raise
+        if path != source and path.exists():
+            if move:
+                path.replace(source)
+            else:
+                import shutil
+
+                shutil.copyfile(path, source)
+        metadata = probe(source, max_seconds=max_seconds)
         metadata["original_path"] = str(source.relative_to(self.root))
         metadata["preview_path"] = str((directory / "preview.mp4").relative_to(self.root))
         metadata["frame_index_seconds"] = (
@@ -274,13 +291,20 @@ class Store:
             ]
 
     def save_segments(
-        self, space_id, material_id, segments, source, alignment_notes=None, job=None
+        self,
+        space_id,
+        material_id,
+        segments,
+        source,
+        alignment_notes=None,
+        job=None,
+        allow_empty=False,
     ):
         from learning_agent.jobs import Jobs
         from learning_agent.media import valid_segments
 
         info = self.media(space_id, material_id)
-        segments = valid_segments(segments, info["duration"])
+        segments = valid_segments(segments, info["duration"], allow_empty=allow_empty)
         jobs = Jobs(self)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -308,6 +332,10 @@ class Store:
                 "UPDATE media SET transcript_state='ready',transcript_source=?,transcript_error=NULL,transcript_revision=? WHERE material_id=?",
                 (source, revision, material_id),
             )
+            if not segments:
+                db.execute(
+                    "UPDATE media SET transcript_state='silent' WHERE material_id=?", (material_id,)
+                )
             db.execute(
                 "INSERT INTO transcript_revisions VALUES (?,?,?,?,?)",
                 (

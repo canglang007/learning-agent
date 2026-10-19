@@ -133,7 +133,7 @@ def test_preview_is_adopted_after_real_process_crash_before_database_commit(
     tmp_path, clip, monkeypatch
 ):
     settings, store, space, jobs = setup(tmp_path)
-    media = store.add_media(space, "clip.mp4", clip, ".mp4")
+    media = store.add_media(space, "clip.mkv", clip, ".mkv")
     job = jobs.enqueue("preview", space, settings, media["material_id"])
     script = """
 import os, sys
@@ -172,7 +172,7 @@ def test_uploaded_captions_cancel_inflight_asr_and_preserve_old_until_publicatio
 ):
     # The real clip has no audio; mark a synthetic audio track in metadata for this race test.
     settings, store, space, jobs = setup(tmp_path, asr_provider="local")
-    media = store.add_media(space, "clip.mp4", clip, ".mp4")
+    media = store.add_media(space, "clip.mkv", clip, ".mkv")
     identifier = media["material_id"]
     with store.connect() as db:
         metadata = json.loads(
@@ -194,7 +194,7 @@ def test_uploaded_captions_cancel_inflight_asr_and_preserve_old_until_publicatio
         store.save_segments(space, identifier, uploaded, "uploaded:new.vtt")
         return {"segments": [{"start": 0, "end": 1, "text": "stale ASR"}], "alignment_notes": []}
 
-    monkeypatch.setattr("learning_agent.media.transcribe", transcribe)
+    monkeypatch.setattr("learning_agent.media.transcribe_part", transcribe)
     with Worker(settings) as worker:
         worker.drain()
     assert jobs.get(job["id"])["state"] == "cancelled"
@@ -206,7 +206,7 @@ def test_uploaded_captions_cancel_inflight_asr_and_preserve_old_until_publicatio
 
 def test_transcript_result_saved_before_crash_is_reused(tmp_path, clip, monkeypatch):
     settings, store, space, jobs = setup(tmp_path, asr_provider="local")
-    media = store.add_media(space, "clip.mp4", clip, ".mp4")
+    media = store.add_media(space, "clip.mkv", clip, ".mkv")
     identifier = media["material_id"]
     with store.connect() as db:
         metadata = json.loads(
@@ -224,7 +224,7 @@ def test_transcript_result_saved_before_crash_is_reused(tmp_path, clip, monkeypa
         job = jobs.claim()
         jobs.save_part(job, "transcript", {"segments": segments, "alignment_notes": []})
     monkeypatch.setattr(
-        "learning_agent.media.transcribe", lambda *args: pytest.fail("ASR must not repeat")
+        "learning_agent.media.transcribe_part", lambda *args: pytest.fail("ASR must not repeat")
     )
     with Worker(settings) as worker:
         worker.drain()
@@ -267,7 +267,7 @@ def test_failed_preview_never_serves_partial_output_and_can_retry(tmp_path, clip
 
     settings, _, space, jobs = setup(tmp_path)
     client = TestClient(create_app(settings, Scripted([])))
-    item = client.post(f"/api/spaces/{space}/materials", files={"file": ("clip.mp4", clip)}).json()
+    item = client.post(f"/api/spaces/{space}/materials", files={"file": ("clip.mkv", clip)}).json()
     playback = f"/api/spaces/{space}/materials/{item['id']}/playback"
     real_prepare = media.prepare
 

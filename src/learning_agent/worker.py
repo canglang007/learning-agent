@@ -127,6 +127,22 @@ class Worker:
 
         info = self.store.media(job["space_id"], job["material_id"])
         self.jobs.checkpoint(job, "preview")
+        if info.get("browser_playable"):
+            with self.store.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                self.jobs.check(job, db)
+                metadata = json.loads(
+                    db.execute(
+                        "SELECT metadata FROM media WHERE material_id=?", (job["material_id"],)
+                    ).fetchone()[0]
+                )
+                metadata["preview_path"] = info["original_path"]
+                db.execute(
+                    "UPDATE media SET metadata=?,state='ready',error=NULL WHERE material_id=?",
+                    (json.dumps(metadata), job["material_id"]),
+                )
+                self.jobs.finish(job, db)
+            return
         if info["state"] == "ready" and (self.store.root / info["preview_path"]).is_file():
             with self.store.connect() as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -139,13 +155,15 @@ class Worker:
             temporary = directory / "preview.partial.mp4"
             try:
                 prepare(self.store.root / info["original_path"], temporary, info)
-                self.validate_preview(probe(temporary), info)
+                self.validate_preview(
+                    probe(temporary, max_seconds=max(14400, info["duration"] + 1)), info
+                )
                 temporary.replace(output)
             finally:
                 temporary.unlink(missing_ok=True)
         else:
             # Rename succeeded before DB commit: validate and adopt without transcoding again.
-            self.validate_preview(probe(output), info)
+            self.validate_preview(probe(output, max_seconds=max(14400, info["duration"] + 1)), info)
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.jobs.check(job, db)
@@ -174,17 +192,44 @@ class Worker:
             raise MediaError("预览轨道或时长与原文件不符，请重试")
 
     def transcribe(self, job):
-        from learning_agent.media import transcribe
+        from learning_agent.media import asr_parts, merge_transcripts, transcribe_part
 
         info = self.store.media(job["space_id"], job["material_id"])
         result = self.jobs.part(job, "transcript")
         if result is None:
-            self.jobs.checkpoint(
-                job, "transcribe", remote=self.settings.asr_provider == "compatible"
-            )
-            result = transcribe(
-                self.store.root / info["original_path"], info["duration"], self.settings
-            )
+            results = []
+            parts = asr_parts(info["duration"], self.settings)
+            directory = self.store.root / "jobs" / job["id"]
+            for part in parts:
+                self.jobs.checkpoint(
+                    job,
+                    "transcribe",
+                    len(results),
+                    len(parts),
+                    seconds=part["start"],
+                    duration=info["duration"],
+                )
+                key = "asr:" + str(part["index"])
+                saved = self.jobs.part(job, key)
+                if saved is None:
+
+                    def before_remote():
+                        self.jobs.checkpoint(job, "transcribe", remote=True)
+
+                    saved = transcribe_part(
+                        self.store.root / info["original_path"],
+                        part,
+                        self.settings,
+                        directory,
+                        before_remote,
+                    )
+                    saved["created_attempt"] = job["attempt"]
+                    self.jobs.save_part(job, key, saved)
+                results.append(saved)
+                self.jobs.checkpoint(
+                    job, "transcribe", len(results), len(parts), seconds=part["end"]
+                )
+            result = merge_transcripts(results, info["duration"])
             self.jobs.save_part(job, "transcript", result)
         self.jobs.checkpoint(job, "publish_transcript")
         self.store.save_segments(
@@ -194,6 +239,7 @@ class Worker:
             f"asr:{self.settings.asr_provider}:{self.settings.asr_model}",
             alignment_notes=result["alignment_notes"],
             job=job,
+            allow_empty=True,
         )
 
     def index(self, job):

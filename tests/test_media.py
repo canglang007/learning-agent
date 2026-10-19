@@ -230,6 +230,7 @@ def test_transcription_chunk_offsets(tmp_path, monkeypatch, duration):
         asr_provider="compatible",
         asr_model="whisper-1",
         asr_api_key=SecretStr("dummy"),
+        asr_context_seconds=0,
     )
     result = media.transcribe(tmp_path / "audio.wav", duration, settings)
     assert (
@@ -285,7 +286,7 @@ def test_local_asr_accepts_decoded_waveform_and_failure_preserves_captions(tmp_p
     def fail(*args):
         raise MediaError("识别失败，请重试")
 
-    monkeypatch.setattr(media, "transcribe", fail)
+    monkeypatch.setattr(media, "transcribe_part", fail)
     assert client.post(base + "/transcribe").status_code == 202
     with Worker(config) as worker:
         worker.drain()

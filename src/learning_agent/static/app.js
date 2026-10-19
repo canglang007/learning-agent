@@ -1,10 +1,11 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2,'0')}`;
+const clock = s => s>=3600?`${Math.floor(s/3600)}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`:`${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
 let indexPoll=null, jobsPoll=null, jobsSignature='', outlineMaterial='', feedbackDraft=null, feedbackStarter='';
 const feedbackNames={stuck:'这一步没懂',example:'换个例子',restate:'我来复述',understood:'这一点明白了'};
 const approachNames={clarify:'澄清卡点',prerequisite:'补前置知识',step_by_step:'拆开推导',example:'数值例子',analogy:'类比',source_check:'核对资料',check_restatement:'检查复述',explain:'解释概念',acknowledge:'确认反馈'};
 let space='', conversation='', configured=false, busy=false, focus=null, media=null, poll=null, asr='disabled';
+let uploading=false, pauseUpload=false;
 async function api(path, options={}) {
   const response=await fetch('/api'+path,options), data=await response.json();
   if(!response.ok) throw Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail));
@@ -16,6 +17,7 @@ function guarded(fn) {return async e=>{try{await fn(e);}catch(error){notice(erro
 function availability() {
   for(const id of ['send','spaces','conversations','new-conversation']) $(id).disabled=busy;
   document.querySelectorAll('#space-form input,#space-form button,#upload-form input,#upload-form button').forEach(el=>el.disabled=busy);
+  if(uploading){$('spaces').disabled=true;document.querySelectorAll('#space-form input,#space-form button,#upload-form input,#upload-form button').forEach(el=>el.disabled=true);}
   $('send').disabled=busy||!conversation||!configured;
   document.querySelectorAll('.feedback-actions button,#cancel-feedback').forEach(el=>el.disabled=busy);
 }
@@ -66,6 +68,7 @@ async function loadSpace(reset=false) {
   $('conversations').innerHTML=conversations.map(c=>`<option value="${c.id}">${esc(c.title||'新会话 '+c.id.slice(0,8))}</option>`).join('');
   await refreshIndex();
   await refreshJobs();
+  refreshUploadRecovery();
   conversation=conversations.find(c=>c.id===conversation)?.id||conversations[0]?.id||'';$('conversations').value=conversation;await loadChat();
 }
 async function loadChat() {
@@ -144,11 +147,11 @@ async function refreshMedia() {
   const wasReady=media.state==='ready', wasTranscribing=media.transcript_state==='running';media=info;
   const materialButton=$('materials').querySelector(`[data-material="${id}"]`);
   if(materialButton)materialButton.textContent=info.name+' · '+({ready:'可回放',processing:'准备中',failed:'准备失败'}[info.state]||info.state);
-  $('media-state').textContent=`回放：${{ready:'就绪',processing:'等待或正在准备',failed:'失败',paused:'已暂停',cancelled:'已取消'}[info.state]||info.state}${info.error?' · '+info.error:''}；字幕：${{ready:'已就绪',missing:'未提供',running:'等待或正在转写',failed:'转写失败',paused:'已暂停',cancelled:'已取消'}[info.transcript_state]||info.transcript_state}${info.transcript_error?' · '+info.transcript_error:''}${info.segment_count&&info.transcript_state!=='ready'?'；已有字幕仍可使用':''}`;
+  $('media-state').textContent=`回放：${{ready:'就绪',processing:'等待或正在准备',failed:'失败',paused:'已暂停',cancelled:'已取消'}[info.state]||info.state}${info.error?' · '+info.error:''}；字幕：${{ready:'已就绪',missing:'未提供',running:'等待或正在转写',silent:'未识别到讲话，可上传字幕',failed:'转写失败',paused:'已暂停',cancelled:'已取消'}[info.transcript_state]||info.transcript_state}${info.transcript_error?' · '+info.transcript_error:''}${info.segment_count&&info.transcript_state!=='ready'?'；已有字幕仍可使用':''}`;
   $('retry-media').hidden=info.state!=='failed';$('transcribe').disabled=asr==='disabled'||!info.has_audio||info.transcript_state==='running';
   $('caption-file').disabled=false;$('caption-form').querySelector('button').disabled=false;
   $('asr-hint').textContent=asr==='disabled'?'未配置ASR：可以上传字幕。无字幕的视频仍可看图，但不能解释未识别的讲话。':`转写方式：${asr}。仅点击后运行；云端转写会上传音频并可能计费。`;
-  $('caption-source').textContent=(info.transcript_source||'没有时间字幕')+(info.alignment_notes?.length?'；有'+info.alignment_notes.length+'处ASR时间戳按可回放范围裁剪，原始时间见工具记录。':'');
+  $('caption-source').textContent=(info.transcript_source||'没有时间字幕')+(info.alignment_notes?.length?'；有'+info.alignment_notes.length+'处时间对齐说明（窗口裁剪、分片跨界或重复合并），明细见工具记录。':'');
   const segments=await api(`/spaces/${space}/materials/${id}/segments`);
   if(media?.material_id!==id)return;
   $('segments').replaceChildren();
@@ -167,9 +170,50 @@ $('conversations').onchange=guarded(async()=>{clearFeedback();conversation=$('co
 $('space-form').onsubmit=guarded(async e=>{e.preventDefault();const item=await post('/spaces',$('space-name').value);localStorage.setItem('learning-space',item.id);await loadSpaces();notice('资料空间已创建');});
 $('upload-form').onsubmit=guarded(async e=>{
   e.preventDefault();if(!space)throw Error('请先创建资料空间');
+  const file=$('file').files[0];if(!file)return;
+  if(/\.(mp4|mov|webm|mkv|mp3|m4a|wav|ogg|flac)$/i.test(file.name)){
+    if(localStorage.getItem(uploadKey())){refreshUploadRecovery();notice('有未完成的媒体上传。请确认所选为同一原文件后继续，或先取消旧上传。');return;}
+    const session=await api(`/spaces/${space}/uploads`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:file.name,size:file.size,last_modified:file.lastModified})});
+    localStorage.setItem(uploadKey(),JSON.stringify({id:session.id,name:file.name,size:file.size,lastModified:file.lastModified}));
+    return sendMedia(file,session);
+  }
   notice('正在上传并检查资料…');const data=new FormData();data.append('file',$('file').files[0]);const item=await api(`/spaces/${space}/materials`,{method:'POST',body:data});
   await loadSpace();if(item.material_id)await showMedia(item.material_id);notice(item.material_id?'音视频已收录，正在后台准备回放。':'资料已就绪');
 });
+const uploadKey=()=>`learning-upload-${space}`;
+function pendingUpload(){try{return JSON.parse(localStorage.getItem(uploadKey())||'null');}catch{return null;}}
+function refreshUploadRecovery(){
+  const pending=pendingUpload();$('upload-recovery').hidden=!pending||uploading;
+  if(!pending)return;
+  $('upload-recovery-hint').textContent=`未完成：${pending.name}。刷新后请重新选择同一原文件；名称、大小和修改时间只能辅助匹配，请你确认内容相同。`;
+  const file=$('file').files[0];$('resume-upload').disabled=uploading||!file||file.name!==pending.name||file.size!==pending.size||file.lastModified!==pending.lastModified;
+}
+async function sendMedia(file,session){
+  uploading=true;pauseUpload=false;availability();refreshUploadRecovery();$('pause-upload').hidden=false;$('pause-upload').disabled=false;
+  try{
+    while(session.state==='uploading'&&session.received<session.size){
+      if(pauseUpload){notice('上传已暂停。已确认文件块会保留，可继续上传。');return;}
+      const end=Math.min(session.size,session.received+session.chunk_size);
+      session=await api(`/uploads/${session.id}`,{method:'PATCH',headers:{'Upload-Offset':String(session.received)},body:file.slice(session.received,end)});
+      $('upload-progress').textContent=`已确认 ${Math.floor(session.received/session.size*100)}%（${session.received}/${session.size} 字节）`;
+    }
+    if(pauseUpload){notice('文件块已保存，继续时将完成媒体检查。');return;}
+    $('upload-progress').textContent='文件已上传，正在检查媒体并完成收录…';
+    const item=await api(`/uploads/${session.id}/complete`,{method:'POST'});
+    localStorage.removeItem(uploadKey());$('upload-progress').textContent='媒体上传完成';
+    await loadSpace();await showMedia(item.id);notice('整份媒体已收录，回放由后台处理；转写需另外点击开始。');
+  }finally{uploading=false;$('pause-upload').hidden=true;availability();refreshUploadRecovery();}
+}
+$('file').onchange=refreshUploadRecovery;
+$('pause-upload').onclick=()=>{pauseUpload=true;$('pause-upload').disabled=true;};
+$('resume-upload').onclick=guarded(async()=>{
+  const pending=pendingUpload(), file=$('file').files[0];
+  if(!pending||!file||file.name!==pending.name||file.size!==pending.size||file.lastModified!==pending.lastModified)throw Error('请重新选择同一原文件，或取消旧上传后重新开始');
+  const session=await api(`/uploads/${pending.id}`);
+  if(session.state==='cancelled'){localStorage.removeItem(uploadKey());refreshUploadRecovery();throw Error('此上传已取消，请重新上传');}
+  await sendMedia(file,session);
+});
+$('cancel-upload').onclick=guarded(async()=>{const pending=pendingUpload();if(!pending||uploading)return;await api(`/uploads/${pending.id}`,{method:'DELETE'});localStorage.removeItem(uploadKey());refreshUploadRecovery();$('upload-progress').textContent='临时上传已取消';});
 $('new-conversation').onclick=guarded(async()=>{clearFeedback();if(!space)throw Error('请先创建资料空间');const c=await api(`/spaces/${space}/conversations`,{method:'POST'});await loadSpace();conversation=c.id;$('conversations').value=c.id;await loadChat();});
 $('ask-form').onsubmit=async e=>{
   e.preventDefault();if(busy||!conversation)return;busy=true;availability();notice('正在理解问题并按需查阅资料…');
@@ -211,7 +255,7 @@ async function refreshJobs() {
   for(const job of result.jobs.slice(0,15)) {
     const row=document.createElement('div'), title=document.createElement('small');
     const name=job.material_id?$('materials').querySelector(`[data-material="${job.material_id}"]`)?.textContent?.split(' · ')[0]:'';
-    title.textContent=`${name?name+' · ':''}${names[job.kind]}：${states[job.state]}${job.pause_requested&&job.state==='running'?'，等待当前步骤结束':''}${job.kind==='index'&&job.state==='running'?'，段落 '+job.completed+'/'+job.total:''}${job.error?' · '+job.error:''}`;row.append(title);
+    title.textContent=`${name?name+' · ':''}${names[job.kind]}：${states[job.state]}${job.pause_requested&&job.state==='running'?'，等待当前步骤结束':''}${job.kind==='index'&&job.state==='running'?'，段落 '+job.completed+'/'+job.total:''}${job.kind==='transcribe'&&job.total_seconds?'，已保存 '+clock(job.processed_seconds)+' / '+clock(job.total_seconds)+'，分片 '+job.completed+'/'+job.total:''}${job.error?' · '+job.error:''}`;row.append(title);
     const actions=job.state==='queued'||job.state==='running'?['pause','cancel']:job.state==='paused'?['resume','cancel']:job.state==='failed'?['retry','cancel']:[];
     for(const action of actions){const b=document.createElement('button');b.type='button';b.textContent=({pause:'暂停',cancel:'取消',resume:'继续',retry:job.error?.includes('remote_result_unknown')?'知晓可能再次计费后重试':'重试'})[action];b.disabled=action==='pause'&&Boolean(job.pause_requested);
       b.onclick=guarded(async()=>{b.disabled=true;await api(`/jobs/${job.id}/${action}`,{method:'POST'});await refreshJobs();await refreshMedia();await refreshIndex();});row.append(b);}
@@ -288,4 +332,4 @@ async function openHash() {
   notice('当前本机资料空间没有此媒体',true);
 }
 window.onhashchange=guarded(openHash);
-(async()=>{try{const s=await api('/status');configured=s.configured;asr=s.asr_provider;$('status').textContent=`模型：${s.model} · 协议：${s.protocol} · ${configured?'已配置，能力以实际执行结果为准':'未配置API key，可先整理资料'}`;await loadSpaces();await openHash();}catch(e){notice(e.message,true);}})();
+(async()=>{try{const s=await api('/status');configured=s.configured;asr=s.asr_provider;$('status').textContent=`模型：${s.model} · 协议：${s.protocol} · ${configured?'已配置，能力以实际执行结果为准':'未配置API key，可先整理资料'} · 媒体上限 ${(s.media_max_bytes/1024**3).toFixed(2)} GiB / ${(s.media_max_seconds/3600).toFixed(1)} 小时`;await loadSpaces();await openHash();}catch(e){notice(e.message,true);}})();
