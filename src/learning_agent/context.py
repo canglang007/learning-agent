@@ -37,7 +37,11 @@ class TurnInput:
 
     def message(self, excerpt=False):
         content = self.question
-        if self.learning.get("working_note") or self.learning.get("feedback"):
+        if (
+            self.learning.get("working_note")
+            or self.learning.get("feedback")
+            or self.learning.get("state")
+        ):
             content += (
                 "\n[会话学习工作记录，仅供判断、可被用户修正："
                 + json.dumps(self.learning, ensure_ascii=False)
@@ -155,9 +159,29 @@ class ContextManager:
         self.builder = builder or OpenAIProvider(settings)
         self.profile = profile_id(settings)
 
-    def prepare(self, prior_turns, current_groups, turn_input, instructions, tools, allow):
+    def prepare(
+        self, prior_turns, current_groups, turn_input, instructions, tools, allow, summary=None
+    ):
         blocks, omissions = [], []
+        if summary:
+            from learning_agent.summaries import summary_message
+
+            blocks.append(
+                {
+                    "id": summary["id"],
+                    "kind": "summary",
+                    "messages": [summary_message(summary)],
+                    "turn": "summary",
+                    "pinned": True,
+                    "mode": "summary",
+                }
+            )
         for turn in prior_turns:
+            if summary and 0 < turn["turn_seq"] <= summary["covered_end"]:
+                omissions.append(
+                    {"group_id": f"turn:{turn['turn_seq']}", "reason": "covered_by_summary"}
+                )
+                continue
             compatible = turn["profile"] == self.profile and turn["replay_status"] == "ready"
             if not compatible:
                 blocks.append(
@@ -305,6 +329,7 @@ class ContextManager:
         def snapshot(estimate):
             return {
                 "schema_version": 1,
+                "summary_id": summary["id"] if summary else None,
                 "profile": self.profile,
                 "estimate": estimate,
                 "input_budget": self.settings.context_budget_tokens
@@ -355,6 +380,10 @@ class ContextManager:
                 if b["kind"] == "input" and b["turn"] == "current":
                     b["messages"] = [turn_input.message(excerpt=True)]
                     omissions.append({"group_id": b["id"], "reason": "feedback_excerpt"})
+            messages, estimate = measure()
+        if not fits(estimate) and summary:
+            blocks = [b for b in blocks if b["kind"] != "summary"]
+            omissions.append({"group_id": summary["id"], "reason": "summary_budget_pressure"})
             messages, estimate = measure()
         if not fits(estimate):
             raise ContextError(

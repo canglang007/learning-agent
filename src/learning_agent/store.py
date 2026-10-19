@@ -71,6 +71,14 @@ class Store:
                     run_id TEXT NOT NULL, step INTEGER NOT NULL,
                     snapshot TEXT NOT NULL, result TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL, PRIMARY KEY(run_id,step));
+                CREATE TABLE IF NOT EXISTS learning_states (
+                    conversation_id TEXT PRIMARY KEY, revision INTEGER NOT NULL,
+                    state_json TEXT NOT NULL, updated_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS context_summaries (
+                    id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, covered_end INTEGER NOT NULL,
+                    context_epoch INTEGER NOT NULL, state_revision INTEGER NOT NULL,
+                    profile TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+                    result TEXT NOT NULL, created_at TEXT NOT NULL);
             """)
             db.execute("BEGIN IMMEDIATE")
             columns = {row[1] for row in db.execute("PRAGMA table_info(materials)")}
@@ -490,7 +498,17 @@ class Store:
             db.execute("UPDATE runs SET events=? WHERE id=?", (json.dumps(events), run_id))
 
     def finish_run(
-        self, run_id, state, content, protocol, error=None, learning_notes=(), *, archive=None
+        self,
+        run_id,
+        state,
+        content,
+        protocol,
+        error=None,
+        learning_notes=(),
+        *,
+        archive=None,
+        state_update=None,
+        expected_revision=None,
     ):
         with self.connect() as db:
             row = db.execute("SELECT conversation_id FROM runs WHERE id=?", (run_id,)).fetchone()
@@ -529,6 +547,18 @@ class Store:
                         for note in learning_notes
                     ],
                 )
+                if state_update is not None:
+                    db.execute(
+                        "UPDATE learning_states SET revision=?,state_json=?,updated_at=? "
+                        "WHERE conversation_id=? AND revision=?",
+                        (
+                            state_update["revision"],
+                            json.dumps(state_update),
+                            datetime.now(UTC).isoformat(),
+                            row["conversation_id"],
+                            expected_revision,
+                        ),
+                    )
 
     def learning_state(self, conversation_id):
         self.get_conversation(conversation_id)
@@ -542,11 +572,141 @@ class Store:
                 (conversation_id,),
             ).fetchall()
         attempts = [{"run_id": row["run_id"], **json.loads(row["note"])} for row in reversed(notes)]
+        state = self.current_learning_state(conversation_id)
         return {
-            "working_note": attempts[-1] if attempts else None,
+            "working_note": attempts[-1] if attempts and not state["reset"] else None,
             "attempts": attempts,
             "feedback": [dict(row) for row in reversed(feedback)],
+            "state": state,
+            "revision": state["revision"],
             "detail": "工作记录是Agent可修正的判断；明白了是用户对所指回答的自述，不代表客观掌握。",
+        }
+
+    def current_learning_state(self, conversation_id):
+        from learning_agent.learning import apply_learning_update, empty_state
+
+        self.get_conversation(conversation_id)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state_json FROM learning_states WHERE conversation_id=?", (conversation_id,)
+            ).fetchone()
+            if row:
+                state = json.loads(row[0])
+                state.setdefault(
+                    "goal_pinned",
+                    bool(state["goal"] and state["goal"]["origin"] == "user_explicit"),
+                )
+                for ref in state["evidence_refs"]:
+                    current = db.execute(
+                        "SELECT revision FROM materials WHERE id=? AND space_id="
+                        "(SELECT space_id FROM conversations WHERE id=?)",
+                        (ref["material_id"], conversation_id),
+                    ).fetchone()
+                    ref["version_status"] = (
+                        "current_version"
+                        if current and current[0] == ref["material_revision"]
+                        else "stale_or_missing"
+                    )
+                return state
+            state = empty_state()
+            note = db.execute(
+                "SELECT run_id,note FROM learning_notes WHERE conversation_id=? ORDER BY seq DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+            if note:
+                data = json.loads(note["note"])
+                state = apply_learning_update(
+                    state,
+                    {"active_topic": data["topic"], "confusion": data["confusion"]},
+                    run_id=note["run_id"],
+                    note=data,
+                )
+            db.execute(
+                "INSERT INTO learning_states VALUES (?,?,?,?)",
+                (
+                    conversation_id,
+                    state["revision"],
+                    json.dumps(state),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            return state
+
+    def edit_learning_state(self, conversation_id, edit):
+        from learning_agent.learning import LearningConflict, apply_learning_update, empty_state
+
+        self.current_learning_state(conversation_id)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute(
+                "SELECT 1 FROM runs WHERE conversation_id=? AND state='running'", (conversation_id,)
+            ).fetchone():
+                raise LearningConflict("正在回答，请完成后再修改学习状态")
+            row = db.execute(
+                "SELECT revision,state_json FROM learning_states WHERE conversation_id=?",
+                (conversation_id,),
+            ).fetchone()
+            if row["revision"] != edit["revision"]:
+                raise LearningConflict("学习状态已更新，请刷新后再修改")
+            if edit.get("reset"):
+                prior = json.loads(row["state_json"])
+                state = empty_state()
+                state.update(
+                    revision=prior["revision"] + 1,
+                    context_epoch=prior["context_epoch"] + 1,
+                    reset=True,
+                )
+            else:
+                state = apply_learning_update(json.loads(row["state_json"]), edit, user=True)
+            db.execute(
+                "UPDATE learning_states SET revision=?,state_json=?,updated_at=? WHERE conversation_id=?",
+                (
+                    state["revision"],
+                    json.dumps(state),
+                    datetime.now(UTC).isoformat(),
+                    conversation_id,
+                ),
+            )
+            db.execute(
+                "UPDATE context_summaries SET status='invalidated' WHERE conversation_id=? AND status='ready'",
+                (conversation_id,),
+            )
+        return self.learning_state(conversation_id)
+
+    def recall_learning_context(
+        self, conversation_id, run_id, role, start_char, max_chars, turn_seq=None
+    ):
+        self.get_conversation(conversation_id)
+        with self.connect() as db:
+            if (run_id is None) == (turn_seq is None):
+                raise ValueError("run_id与turn_seq需且只能提供一个")
+            if run_id is None:
+                source = db.execute(
+                    "SELECT run_id FROM protocol_turns WHERE conversation_id=? AND turn_seq=?",
+                    (conversation_id, turn_seq),
+                ).fetchone()
+                run_id = source[0] if source else None
+            row = db.execute(
+                "SELECT m.content,r.state FROM messages m JOIN runs r ON r.id=m.run_id "
+                "WHERE m.conversation_id=? AND m.run_id=? AND m.role=? AND r.state!='running'",
+                (conversation_id, run_id, role),
+            ).fetchone()
+        if row is None:
+            raise LookupError("当前会话没有此已完成回合的可见原话")
+        text = row["content"]
+        if start_char > len(text):
+            raise ValueError("原话读取偏移超出长度")
+        return {
+            "run_id": run_id,
+            "role": role,
+            "response_state": row["state"],
+            "content": text[start_char : start_char + max_chars],
+            "start_char": start_char,
+            "end_char": min(len(text), start_char + max_chars),
+            "total_chars": len(text),
+            "truncated": start_char > 0 or start_char + max_chars < len(text),
+            "detail": "历史可见原话，不是资料核实或当前视觉观察；省略部分可按偏移继续读取。",
         }
 
     def feedback_target(self, conversation_id, target_run_id):
@@ -623,6 +783,8 @@ class Store:
             turns.append(
                 {
                     "turn_seq": row["turn_seq"],
+                    "run_id": row["run_id"],
+                    "raw_input": raw,
                     "profile": json.loads(row["profile"]),
                     "groups": groups,
                     "replay_status": row["replay_status"],
@@ -640,6 +802,43 @@ class Store:
                 "INSERT INTO context_snapshots VALUES (?,?,?,'{}',?)",
                 (run_id, step, json.dumps(snapshot), datetime.now(UTC).isoformat()),
             )
+
+    def save_summary(self, record):
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO context_summaries VALUES (?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET status=excluded.status,payload=excluded.payload,result=excluded.result",
+                (
+                    record["id"],
+                    record["conversation_id"],
+                    record["covered_end"],
+                    record["context_epoch"],
+                    record["state_revision"],
+                    json.dumps(record["profile"]),
+                    record["status"],
+                    json.dumps(record["payload"]),
+                    json.dumps(record["result"]),
+                    record["created_at"],
+                ),
+            )
+
+    def latest_summary_attempt(self, conversation_id, epoch, profile, *, ready=False):
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT * FROM context_summaries WHERE conversation_id=? AND context_epoch=? "
+                + ("AND status='ready' " if ready else "")
+                + "ORDER BY rowid DESC",
+                (conversation_id, epoch),
+            ).fetchall()
+        for row in rows:
+            if json.loads(row["profile"]) == profile:
+                return {
+                    **dict(row),
+                    "profile": json.loads(row["profile"]),
+                    "payload": json.loads(row["payload"]),
+                    "result": json.loads(row["result"]),
+                }
+        return None
 
     def context_result(self, run_id, step, result):
         with self.connect() as db:

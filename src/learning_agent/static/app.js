@@ -6,6 +6,7 @@ const feedbackNames={stuck:'这一步没懂',example:'换个例子',restate:'我
 const approachNames={clarify:'澄清卡点',prerequisite:'补前置知识',step_by_step:'拆开推导',example:'数值例子',analogy:'类比',source_check:'核对资料',check_restatement:'检查复述',explain:'解释概念',acknowledge:'确认反馈'};
 let space='', conversation='', configured=false, busy=false, focus=null, media=null, poll=null, asr='disabled';
 let uploading=false, pauseUpload=false;
+let learningRevision=0;
 async function api(path, options={}) {
   const response=await fetch('/api'+path,options), data=await response.json();
   if(!response.ok) throw Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail));
@@ -20,6 +21,7 @@ function availability() {
   if(uploading){$('spaces').disabled=true;document.querySelectorAll('#space-form input,#space-form button,#upload-form input,#upload-form button').forEach(el=>el.disabled=true);}
   $('send').disabled=busy||!conversation||!configured;
   document.querySelectorAll('.feedback-actions button,#cancel-feedback').forEach(el=>el.disabled=busy);
+  document.querySelectorAll('#learning-editor button,#learning-questions button,#reset-learning').forEach(el=>el.disabled=busy);
 }
 function markdown(node,text) {
   // Protect TeX before Markdown consumes backslashes; leave code spans/blocks untouched.
@@ -305,8 +307,14 @@ function addFeedbackActions(article,runId,body) {
 async function loadLearning() {
   const selected=conversation;$('learning-panel').hidden=!selected;if(!selected)return;
   const state=await api(`/conversations/${selected}/learning`);if(selected!==conversation)return;
-  const note=state.working_note;$('learning-note').replaceChildren();
-  for(const text of note?[`最近记录的主题：${note.topic}`,`Agent判断的卡点：${note.confusion||'尚未明确'}`,`当前讲法：${approachNames[note.approach]||note.approach}；${note.reason}`]:['尚未记录卡点，可以直接提问或给上一轮讲解反馈。']){
+  const note=state.working_note, current=state.state;learningRevision=state.revision;$('learning-note').replaceChildren();
+  const facts=[['goal','学习目标'],['active_topic','当前主题'],['confusion','当前卡点']];
+  for(const [key,label] of facts){
+    const fact=current[key], p=document.createElement('p');p.textContent=`${label}：${fact?.text||'尚未明确'}${fact?'（'+(key==='goal'&&current.goal_pinned?'你固定的目标':fact.origin==='user_explicit'?'你明确填写':'Agent工作判断，可修正')+'）':''}`;$('learning-note').append(p);
+    $('learning-'+key).value=fact?.text||'';
+  }
+  $('learning-goal-pinned').checked=!!current.goal_pinned;
+  for(const text of note?[`当前讲法：${approachNames[note.approach]||note.approach}；${note.reason}`]:['可以直接提问，或修改当前学习目标。']){
     const p=document.createElement('p');p.textContent=text;$('learning-note').append(p);
   }
   $('learning-attempts').textContent=state.attempts.length?'最近讲解尝试：'+state.attempts.map(a=>approachNames[a.approach]||a.approach).join(' → '):'';
@@ -315,7 +323,35 @@ async function loadLearning() {
     const p=document.createElement('p');p.textContent=`已提交反馈：${feedbackNames[f.kind]}${f.focus_text?'；卡点：'+f.focus_text:''} `;
     const link=document.createElement('a');link.href='#answer-'+f.target_run_id;link.textContent='返回对应讲解';p.append(link);$('learning-feedback').append(p);
   }
+  $('learning-questions').replaceChildren();
+  for(const q of current.open_questions){
+    const p=document.createElement('p');p.textContent=`${q.status==='open'?'待解释':q.status==='user_understood'?'你已反馈理解':'你已关闭'}：${q.text} `;
+    if(q.status==='open'){
+      const close=document.createElement('button');close.type='button';close.textContent='关闭此问题';close.style.width='auto';
+      close.onclick=guarded(async()=>{await editLearning({close_question_ids:[q.id]});});p.append(close);
+    }
+    if(q.source_run_id){const a=document.createElement('a');a.href='#answer-'+q.source_run_id;a.textContent='来源回答';p.append(a);}
+    $('learning-questions').append(p);
+  }
+  $('learning-summary').replaceChildren();
+  if(state.summary){
+    const title=document.createElement('p');title.textContent=`历史摘要（到第${state.summary.covered_end}轮，仅保留所选原话要点；可核对来源）`;$('learning-summary').append(title);
+    for(const item of state.summary.payload.items){
+      const p=document.createElement('p');p.textContent=item.text+' ';
+      for(const id of item.source_run_ids){const a=document.createElement('a');a.href='#answer-'+id;a.textContent='来源回合 ';p.append(a);}
+      $('learning-summary').append(p);
+    }
+  }
 }
+async function editLearning(patch){
+  await api(`/conversations/${conversation}/learning`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:learningRevision,...patch})});
+  await loadLearning();notice('学习状态已保存，旧摘要已失效；原始对话仍保留。');
+}
+$('learning-edit-form').onsubmit=guarded(async e=>{e.preventDefault();await editLearning({
+  goal:$('learning-goal').value.trim()||null,goal_pinned:$('learning-goal-pinned').checked,active_topic:$('learning-active_topic').value.trim()||null,
+  confusion:$('learning-confusion').value.trim()||null,add_questions:$('learning-add-question').value.trim()?[$('learning-add-question').value.trim()]:[]
+});$('learning-add-question').value='';});
+$('reset-learning').onclick=guarded(async()=>{await editLearning({reset:true});});
 $('cancel-feedback').onclick=clearFeedback;
 async function openHash() {
   const p=new URLSearchParams(location.hash.slice(1)), requestedConversation=p.get('conversation'), id=p.get('media');

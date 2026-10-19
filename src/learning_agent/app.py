@@ -9,8 +9,9 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 from learning_agent.agent import run_turn
 from learning_agent.config import Settings
+from learning_agent.context import profile_id
 from learning_agent.jobs import JobConflict, Jobs
-from learning_agent.learning import Feedback, FeedbackError
+from learning_agent.learning import Feedback, FeedbackError, LearningConflict, UserStateEdit
 from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
 from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
@@ -329,7 +330,22 @@ def create_app(settings=None, provider=None):
 
     @app.get("/api/conversations/{conversation_id}/learning")
     async def learning_state(conversation_id: str):
-        return store.learning_state(conversation_id)
+        result = store.learning_state(conversation_id)
+        summary = store.latest_summary_attempt(
+            conversation_id, result["state"]["context_epoch"], profile_id(settings), ready=True
+        )
+        return {**result, "summary": summary}
+
+    @app.patch("/api/conversations/{conversation_id}/learning")
+    async def edit_learning(conversation_id: str, payload: UserStateEdit):
+        try:
+            return store.edit_learning_state(
+                conversation_id, payload.model_dump(exclude_unset=True)
+            )
+        except LearningConflict as error:
+            raise HTTPException(409, str(error)) from None
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
 
     @app.get("/api/runs/{run_id}")
     async def run(run_id: str):

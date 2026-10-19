@@ -6,10 +6,17 @@ import time
 from pydantic import ValidationError
 
 from learning_agent.context import ContextError, ContextManager, ProtocolGroup, TurnInput
-from learning_agent.learning import LEARNING_GUIDANCE, Explanation, Feedback
+from learning_agent.learning import (
+    LEARNING_GUIDANCE,
+    Explanation,
+    Feedback,
+    apply_learning_update,
+    state_for_context,
+)
 from learning_agent.provider import ModelError, OpenAIProvider, asset_info
 from learning_agent.retrieval import Retriever
-from learning_agent.tools import MaterialTools, definitions
+from learning_agent.summaries import maybe_summarize
+from learning_agent.tools import MaterialTools, RecallArgs, definitions
 
 INSTRUCTIONS = """你是帮助用户学懂内容的学习 Agent。优先准确、清晰地解释当前困惑。
 根据问题和工具结果自主决定：直接讲解、澄清指代、搜索、阅读资料或换一种解释方式。
@@ -41,20 +48,20 @@ async def run_turn(
 ):
     conversation = store.get_conversation(conversation_id)
     feedback = Feedback.model_validate(feedback).model_dump() if feedback else None
-    learning = store.learning_state(conversation_id)
     run_id = store.start_run(conversation_id, question, feedback)
-    if learning["working_note"] or learning["feedback"]:
-        learning = {
-            "working_note": learning["working_note"],
-            "attempts": [
-                {k: a[k] for k in ["run_id", "topic", "approach"]}
-                for a in learning["attempts"][-4:]
-            ],
-            "feedback": [
-                {**f, "content": f["content"][:300], "focus_text": f["focus_text"][:500]}
-                for f in learning["feedback"][-3:]
-            ],
-        }
+    learning = store.learning_state(conversation_id)
+    base_state, pending_state = learning["state"], None
+    learning = {
+        "state": state_for_context(base_state),
+        "working_note": learning["working_note"],
+        "attempts": [
+            {k: a[k] for k in ["run_id", "topic", "approach"]} for a in learning["attempts"][-4:]
+        ],
+        "feedback": [
+            {**f, "content": f["content"][:300], "focus_text": f["focus_text"][:500]}
+            for f in learning["feedback"][-3:]
+        ],
+    }
     turn_input = TurnInput(
         question,
         learning,
@@ -65,6 +72,10 @@ async def run_turn(
     groups = [ProtocolGroup(f"{run_id}:input", "input", [turn_input.message()])]
     manager = ContextManager(settings, provider if isinstance(provider, OpenAIProvider) else None)
     prior_turns = store.context_turns(conversation_id)
+    summary = store.latest_summary_attempt(
+        conversation_id, base_state["context_epoch"], manager.profile, ready=True
+    )
+    summary_attempted = False
     tools = MaterialTools(
         store,
         conversation["space_id"],
@@ -92,8 +103,33 @@ async def run_turn(
                 )
                 tool_definitions = definitions(settings.enable_vision)
                 prepared = manager.prepare(
-                    prior_turns, groups, turn_input, instructions, tool_definitions, allow
+                    prior_turns, groups, turn_input, instructions, tool_definitions, allow, summary
                 )
+                if not summary_attempted:
+                    summary, summary_event = await maybe_summarize(
+                        store,
+                        provider,
+                        settings,
+                        conversation_id,
+                        prior_turns,
+                        base_state,
+                        manager.profile,
+                        prepared,
+                        summary,
+                    )
+                    if summary_event:
+                        summary_attempted = True
+                        events.append(summary_event)
+                        store.save_events(run_id, events)
+                        prepared = manager.prepare(
+                            prior_turns,
+                            groups,
+                            turn_input,
+                            instructions,
+                            tool_definitions,
+                            allow,
+                            summary,
+                        )
                 store.save_context(run_id, context_step, prepared.snapshot)
                 snapshot_saved = True
                 if isinstance(provider, OpenAIProvider):
@@ -174,7 +210,7 @@ async def run_turn(
                                 cached_images
                             ) <= settings.max_images_per_turn - images_used:
                                 material_id = cached["material_id"]
-                                valid = (
+                                valid = name == "recall_learning_context" or (
                                     material_id is not None
                                     and store.material(conversation["space_id"], material_id)[
                                         "revision"
@@ -202,6 +238,23 @@ async def run_turn(
                                     "error": "duplicate_call",
                                     "detail": "已执行过相同调用或恢复预算不足，请利用已有结果或调整行动",
                                 }
+                        elif name == "recall_learning_context":
+                            recall = RecallArgs.model_validate(args)
+                            try:
+                                observation = store.recall_learning_context(
+                                    conversation_id,
+                                    recall.run_id,
+                                    recall.role,
+                                    recall.start_char,
+                                    recall.max_chars,
+                                    recall.turn_seq,
+                                )
+                                seen.add(fingerprint)
+                            except (LookupError, ValueError):
+                                observation = {
+                                    "error": "historical_context_not_found",
+                                    "detail": "仅可读取本会话已完成回合；检查run_id/turn_seq或字符偏移。",
+                                }
                         elif name == "deliver_explanation":
                             if len(calls) != 1:
                                 observation = {
@@ -211,6 +264,7 @@ async def run_turn(
                             else:
                                 try:
                                     result = Explanation.model_validate(args).model_dump()
+                                    state_patch = result.pop("state_update")
                                     delivery = result.pop("answer").strip()
                                     if not delivery:
                                         raise ValueError("empty answer")
@@ -229,17 +283,77 @@ async def run_turn(
                                             result["confusion"] = learning["working_note"][
                                                 "confusion"
                                             ]
+                                    patch = {
+                                        "active_topic": result["topic"],
+                                        "confusion": result["confusion"],
+                                    }
+                                    if state_patch:
+                                        patch.update(
+                                            {k: v for k, v in state_patch.items() if v is not None}
+                                        )
+                                    refs = []
+                                    for event_index, event in enumerate(events):
+                                        o = event.get("observation", {})
+                                        if (
+                                            event.get("name")
+                                            not in {
+                                                "read_passage",
+                                                "read_page",
+                                                "read_context",
+                                                "inspect_page",
+                                                "inspect_media",
+                                            }
+                                            or o.get("error")
+                                            or not o.get("material_id")
+                                        ):
+                                            continue
+                                        refs.append(
+                                            {
+                                                "material_id": o["material_id"],
+                                                "material_revision": event.get("material_revision"),
+                                                "location": {
+                                                    k: o[k]
+                                                    for k in (
+                                                        "page",
+                                                        "region",
+                                                        "start_line",
+                                                        "end_line",
+                                                        "start_seconds",
+                                                        "end_seconds",
+                                                    )
+                                                    if k in o
+                                                },
+                                                "modality": event["name"],
+                                                "source_run_id": run_id,
+                                                "event_index": event_index,
+                                                "historical": True,
+                                            }
+                                        )
+                                    pending_state = apply_learning_update(
+                                        base_state,
+                                        patch,
+                                        run_id=run_id,
+                                        note=result,
+                                        question=question,
+                                        feedback=feedback,
+                                        evidence_refs=refs,
+                                    )
+                                    pending_state["reset"] = False
                                     learning_notes.append(result)
                                     observation = {
                                         "answer_delivered": True,
                                         "working_note": result,
                                         "detail": "回答与工作判断一起保存；不代表用户掌握",
                                     }
-                                except (ValidationError, ValueError):
+                                except (ValidationError, ValueError) as exception:
                                     delivery = None
                                     observation = {
                                         "error": "invalid_arguments",
-                                        "detail": "请提供非空answer和符合定义的学习记录，不要添加掌握结论字段",
+                                        "detail": (
+                                            "请提供非空answer与有效学习记录/状态，不添加掌握字段"
+                                            if isinstance(exception, ValidationError)
+                                            else str(exception)
+                                        ),
                                     }
                             if not observation.get("error"):
                                 seen.add(fingerprint)
@@ -251,9 +365,14 @@ async def run_turn(
                                 image_budget=settings.max_images_per_turn - images_used,
                             )
                             seen.add(fingerprint)
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as exception:
                         args = None
-                        observation = {"error": "invalid_json", "detail": "工具参数需要合法 JSON"}
+                        observation = {
+                            "error": "invalid_arguments"
+                            if isinstance(exception, ValidationError)
+                            else "invalid_json",
+                            "detail": "工具参数需要合法JSON且符合字段约束",
+                        }
                     if not observation.get("error") and name != "deliver_explanation":
                         material_id = observation.get("material_id")
                         observation_cache[fingerprint] = {
@@ -296,6 +415,11 @@ async def run_turn(
                             "name": name,
                             "arguments": args,
                             "observation": observation,
+                            "material_revision": observation_cache.get(fingerprint, {}).get(
+                                "revision"
+                            )
+                            if not observation.get("error")
+                            else None,
                         }
                     )
                     store.save_events(run_id, events)
@@ -346,6 +470,8 @@ async def run_turn(
         history,
         error,
         learning_notes,
+        state_update=pending_state,
+        expected_revision=base_state["revision"],
         archive={
             "profile": manager.profile,
             "input": {

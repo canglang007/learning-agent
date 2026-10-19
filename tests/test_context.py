@@ -20,7 +20,7 @@ def small_settings(tmp_path, **changes):
     return Settings(
         _env_file=None,
         data_root=tmp_path,
-        context_budget_tokens=16000,
+        context_budget_tokens=18000,
         context_output_reserve_tokens=512,
         context_headroom_tokens=512,
         **changes,
@@ -266,7 +266,7 @@ def test_same_turn_image_restore_reuses_asset_and_duplicate_guard_still_stops(
 ):
     client, space, material, conv, model = pdf_setup(tmp_path)
     text = client.post(
-        f"/api/spaces/{space}/materials", files={"file": ("long.txt", b"x" * 4000)}
+        f"/api/spaces/{space}/materials", files={"file": ("long.txt", b"x" * 7000)}
     ).json()["id"]
     args = {"material_id": material, "page": 2, "region": None}
     model.responses = [
@@ -287,7 +287,7 @@ def test_same_turn_image_restore_reuses_asset_and_duplicate_guard_still_stops(
     settings = Settings(
         _env_file=None,
         data_root=tmp_path,
-        context_budget_tokens=20000,
+        context_budget_tokens=26000,
         context_output_reserve_tokens=512,
         context_headroom_tokens=512,
     )

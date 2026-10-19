@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     output_token_field: Literal[
         "none", "max_tokens", "max_completion_tokens", "max_output_tokens"
     ] = "none"
+    enable_context_summary: bool = True
+    summary_input_budget_tokens: int = Field(default=16384, ge=2048)
+    summary_timeout_seconds: float = Field(default=30, gt=0, le=90)
+    summary_min_new_turns: int = Field(default=4, ge=2, le=12)
+    summary_keep_recent_turns: int = Field(default=3, ge=1, le=8)
     asr_provider: Literal["disabled", "local", "compatible"] = "disabled"
     asr_model: str = "base"
     asr_base_url: str = "https://api.openai.com/v1"

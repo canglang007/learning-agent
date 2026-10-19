@@ -9,6 +9,7 @@ from learning_agent.media import MediaError
 from learning_agent.pdf import PdfError
 from learning_agent.retrieval import Retriever
 from learning_agent.store import Store
+from learning_agent.summaries import strict_schema
 
 
 class Args(BaseModel):
@@ -59,6 +60,14 @@ class MediaArgs(Args):
     frame_count: int = Field(default=3, ge=1, le=3)
 
 
+class RecallArgs(Args):
+    run_id: str | None = Field(default=None, max_length=80)
+    turn_seq: int | None = Field(default=None, ge=1)
+    role: Literal["user", "assistant"] = "user"
+    start_char: int = Field(default=0, ge=0)
+    max_chars: int = Field(default=2000, ge=1, le=4000)
+
+
 ARGUMENTS = {
     "list_materials": ListArgs,
     "search_materials": SearchArgs,
@@ -69,6 +78,7 @@ ARGUMENTS = {
     "inspect_page": InspectArgs,
     "inspect_media": MediaArgs,
     "deliver_explanation": Explanation,
+    "recall_learning_context": RecallArgs,
 }
 DESCRIPTIONS = {
     "list_materials": "查看当前空间的资料目录，包含格式与PDF物理页数。",
@@ -80,6 +90,7 @@ DESCRIPTIONS = {
     "inspect_page": "实际查看PDF页面图像以理解图表、公式和排版。page是从1开始的物理页。region=null查看整页，或用左上角原点的归一化[left,top,right,bottom]裁切区域，值在0到1之间。",
     "inspect_media": "读取音视频指定时间段（最多120秒）。transcript读取有时间戳字幕；joint同时抽样最多3帧，受本轮共享图像预算限制。返回字幕来源、实际帧时间和回放链接。不是逐帧观看或直接听音频，缺字幕时不能编造讲话内容。",
     "deliver_explanation": "最终交付讲解与简短学习工作记录，一次完成、无需后续模型调用。answer为给用户的Markdown正文，其他字段记录主题、卡点及实际讲法，不代表掌握。必须独立于其他工具调用，先看完所需观察再交付。",
+    "recall_learning_context": "读取当前会话已完成回合的可见原话。run_id或turn_seq恰好提供一个，另一个填null；role=user或assistant。按start_char偏移读取最多4000字符，返回节选标识。不是资料核实或视觉观察，不能读取其他会话。",
 }
 
 
@@ -88,8 +99,7 @@ def definitions(vision=True):
     for name, model in ARGUMENTS.items():
         if name == "inspect_page" and not vision:
             continue
-        schema = model.model_json_schema()
-        schema["required"] = list(schema.get("properties", {}))
+        schema = strict_schema(model.model_json_schema())
         result.append(
             {"name": name, "description": DESCRIPTIONS[name], "parameters": schema, "strict": True}
         )
@@ -118,7 +128,7 @@ class MaterialTools:
             return {"error": "unknown_tool", "detail": "工具不存在"}
         try:
             args = ARGUMENTS[name].model_validate(arguments)
-            if name == "deliver_explanation":
+            if name in {"deliver_explanation", "recall_learning_context"}:
                 return {
                     "error": "requires_conversation",
                     "detail": "学习工作记录由当前会话执行器处理",
