@@ -6,8 +6,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from learning_agent.memory import MemoryStore
 
-class Store:
+
+class Store(MemoryStore):
     def __init__(self, root: Path):
         self.root = root
         (root / "materials").mkdir(parents=True, exist_ok=True)
@@ -93,6 +95,7 @@ class Store:
                 db.execute(
                     "ALTER TABLE media ADD COLUMN transcript_revision INTEGER NOT NULL DEFAULT 0"
                 )
+        self.init_memory()
 
     @contextmanager
     def connect(self):
@@ -209,7 +212,7 @@ class Store:
             return [
                 dict(row)
                 for row in db.execute(
-                    "SELECT m.id,m.name,m.format,(SELECT count(*) FROM material_pages p WHERE p.material_id=m.id) AS page_count,media.state AS media_state,media.transcript_state FROM materials m LEFT JOIN media ON media.material_id=m.id WHERE m.space_id=? ORDER BY m.rowid",
+                    "SELECT m.id,m.name,m.format,m.revision,(SELECT count(*) FROM material_pages p WHERE p.material_id=m.id) AS page_count,media.state AS media_state,media.transcript_state FROM materials m LEFT JOIN media ON media.material_id=m.id WHERE m.space_id=? ORDER BY m.rowid",
                     (space_id,),
                 )
             ]
@@ -572,6 +575,18 @@ class Store:
                 (conversation_id,),
             ).fetchall()
         attempts = [{"run_id": row["run_id"], **json.loads(row["note"])} for row in reversed(notes)]
+        cutoff = self.context_settings(conversation_id)["history_after"]
+        if cutoff >= 0:
+            with self.connect() as db:
+                allowed = {
+                    r[0]
+                    for r in db.execute(
+                        "SELECT run_id FROM protocol_turns WHERE conversation_id=? AND turn_seq>?",
+                        (conversation_id, cutoff),
+                    )
+                }
+            attempts = [a for a in attempts if a["run_id"] in allowed]
+            feedback = [f for f in feedback if f["run_id"] in allowed]
         state = self.current_learning_state(conversation_id)
         return {
             "working_note": attempts[-1] if attempts and not state["reset"] else None,
@@ -675,7 +690,14 @@ class Store:
         return self.learning_state(conversation_id)
 
     def recall_learning_context(
-        self, conversation_id, run_id, role, start_char, max_chars, turn_seq=None
+        self,
+        conversation_id,
+        run_id,
+        role,
+        start_char,
+        max_chars,
+        turn_seq=None,
+        memory_sources=(),
     ):
         self.get_conversation(conversation_id)
         with self.connect() as db:
@@ -687,10 +709,17 @@ class Store:
                     (conversation_id, turn_seq),
                 ).fetchone()
                 run_id = source[0] if source else None
+            source_conversation = conversation_id
+            if run_id in memory_sources:
+                source = db.execute(
+                    "SELECT conversation_id FROM runs WHERE id=?", (run_id,)
+                ).fetchone()
+                if source:
+                    source_conversation = source[0]
             row = db.execute(
                 "SELECT m.content,r.state FROM messages m JOIN runs r ON r.id=m.run_id "
                 "WHERE m.conversation_id=? AND m.run_id=? AND m.role=? AND r.state!='running'",
-                (conversation_id, run_id, role),
+                (source_conversation, run_id, role),
             ).fetchone()
         if row is None:
             raise LookupError("当前会话没有此已完成回合的可见原话")
@@ -699,6 +728,7 @@ class Store:
             raise ValueError("原话读取偏移超出长度")
         return {
             "run_id": run_id,
+            "conversation_id": source_conversation,
             "role": role,
             "response_state": row["state"],
             "content": text[start_char : start_char + max_chars],
@@ -706,7 +736,8 @@ class Store:
             "end_char": min(len(text), start_char + max_chars),
             "total_chars": len(text),
             "truncated": start_char > 0 or start_char + max_chars < len(text),
-            "detail": "历史可见原话，不是资料核实或当前视觉观察；省略部分可按偏移继续读取。",
+            "historical_only": True,
+            "detail": "历史可见原话，不是资料核实或当前视觉观察，也不重新启用旧偏好。当前问题、明确状态和有效主题记忆优先；省略部分可按偏移继续读取。",
         }
 
     def feedback_target(self, conversation_id, target_run_id):

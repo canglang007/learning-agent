@@ -90,7 +90,7 @@ DESCRIPTIONS = {
     "inspect_page": "实际查看PDF页面图像以理解图表、公式和排版。page是从1开始的物理页。region=null查看整页，或用左上角原点的归一化[left,top,right,bottom]裁切区域，值在0到1之间。",
     "inspect_media": "读取音视频指定时间段（最多120秒）。transcript读取有时间戳字幕；joint同时抽样最多3帧，受本轮共享图像预算限制。返回字幕来源、实际帧时间和回放链接。不是逐帧观看或直接听音频，缺字幕时不能编造讲话内容。",
     "deliver_explanation": "最终交付讲解与简短学习工作记录，一次完成、无需后续模型调用。answer为给用户的Markdown正文，其他字段记录主题、卡点及实际讲法，不代表掌握。必须独立于其他工具调用，先看完所需观察再交付。",
-    "recall_learning_context": "读取当前会话已完成回合的可见原话。run_id或turn_seq恰好提供一个，另一个填null；role=user或assistant。按start_char偏移读取最多4000字符，返回节选标识。不是资料核实或视觉观察，不能读取其他会话。",
+    "recall_learning_context": "读取当前会话，或本轮已召回记忆source明确链接的已完成回合的可见原话。run_id或turn_seq恰好提供一个，另一个填null；跨会话需source.run_id，不可遍历其他对话。role=user或assistant。按start_char偏移读取最多4000字符，返回节选标识。这不是资料核实或当前视觉观察。",
 }
 
 

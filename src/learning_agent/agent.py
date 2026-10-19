@@ -48,7 +48,10 @@ async def run_turn(
 ):
     conversation = store.get_conversation(conversation_id)
     feedback = Feedback.model_validate(feedback).model_dump() if feedback else None
+    store.refresh_memory_versions(conversation_id)
     run_id = store.start_run(conversation_id, question, feedback)
+    memories = store.recall_memories(conversation_id, question, focus)
+    context_setting = store.context_settings(conversation_id)
     learning = store.learning_state(conversation_id)
     base_state, pending_state = learning["state"], None
     learning = {
@@ -68,10 +71,12 @@ async def run_turn(
         feedback,
         store.feedback_target(conversation_id, feedback["target_run_id"]) if feedback else None,
         focus,
+        memories,
     )
     groups = [ProtocolGroup(f"{run_id}:input", "input", [turn_input.message()])]
     manager = ContextManager(settings, provider if isinstance(provider, OpenAIProvider) else None)
     prior_turns = store.context_turns(conversation_id)
+    prior_turns = [t for t in prior_turns if t["turn_seq"] > context_setting["history_after"]]
     summary = store.latest_summary_attempt(
         conversation_id, base_state["context_epoch"], manager.profile, ready=True
     )
@@ -130,6 +135,15 @@ async def run_turn(
                             allow,
                             summary,
                         )
+                prepared.snapshot["memory"] = {
+                    "enabled": memories["enabled"],
+                    "settings_revision": memories["settings_revision"],
+                    "topic_id": memories.get("topic", {}).get("id"),
+                    "selected": [
+                        {"id": m["id"], "revision": m["revision"]} for m in memories["items"]
+                    ],
+                    "history_after": context_setting["history_after"],
+                }
                 store.save_context(run_id, context_step, prepared.snapshot)
                 snapshot_saved = True
                 if isinstance(provider, OpenAIProvider):
@@ -248,12 +262,17 @@ async def run_turn(
                                     recall.start_char,
                                     recall.max_chars,
                                     recall.turn_seq,
+                                    memory_sources=[
+                                        m["source"]["run_id"]
+                                        for m in memories["items"]
+                                        if m["source"]
+                                    ],
                                 )
                                 seen.add(fingerprint)
                             except (LookupError, ValueError):
                                 observation = {
                                     "error": "historical_context_not_found",
-                                    "detail": "仅可读取本会话已完成回合；检查run_id/turn_seq或字符偏移。",
+                                    "detail": "仅可读取本会话或当前召回记忆明确链接的已完成回合；检查范围与偏移。",
                                 }
                         elif name == "deliver_explanation":
                             if len(calls) != 1:
@@ -478,7 +497,7 @@ async def run_turn(
                 "question": question,
                 "focus": focus,
                 "feedback": feedback,
-                "derived_context": {"learning": learning},
+                "derived_context": {"learning": learning, "memories": memories},
             },
             "groups": archived_groups,
         },

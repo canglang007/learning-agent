@@ -21,7 +21,7 @@ function availability() {
   if(uploading){$('spaces').disabled=true;document.querySelectorAll('#space-form input,#space-form button,#upload-form input,#upload-form button').forEach(el=>el.disabled=true);}
   $('send').disabled=busy||!conversation||!configured;
   document.querySelectorAll('.feedback-actions button,#cancel-feedback').forEach(el=>el.disabled=busy);
-  document.querySelectorAll('#learning-editor button,#learning-questions button,#reset-learning').forEach(el=>el.disabled=busy);
+  document.querySelectorAll('#learning-editor button,#learning-questions button,#reset-learning,#memory-panel input,#memory-panel select,#memory-panel textarea,#memory-panel button').forEach(el=>el.disabled=busy);
 }
 function markdown(node,text) {
   // Protect TeX before Markdown consumes backslashes; leave code spans/blocks untouched.
@@ -109,7 +109,7 @@ async function loadChat() {
     }
     $('chat').append(article);
   }
-  await loadLearning();availability();
+  await loadLearning();await loadMemory();availability();
 }
 async function showPage(id,page) {
   const base=`/spaces/${space}/materials/${id}`, data=await api(`${base}/pages/${page}`), pages=await api(`${base}/pages`);
@@ -358,7 +358,7 @@ async function openHash() {
   if(requestedConversation){
     for(const s of await api('/spaces')){
       if((await api(`/spaces/${s.id}/conversations`)).some(c=>c.id===requestedConversation)){
-        clearFeedback();space=s.id;$('spaces').value=space;conversation=requestedConversation;await loadSpace(true);$('learning-panel').open=true;return;
+        clearFeedback();space=s.id;$('spaces').value=space;conversation=requestedConversation;await loadSpace(true);$('learning-panel').open=true;if(p.get('answer'))$('answer-'+p.get('answer'))?.scrollIntoView();return;
       }
     }
     notice('当前本机资料空间没有此会话',true);return;

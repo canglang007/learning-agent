@@ -13,6 +13,7 @@ from learning_agent.context import profile_id
 from learning_agent.jobs import JobConflict, Jobs
 from learning_agent.learning import Feedback, FeedbackError, LearningConflict, UserStateEdit
 from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
+from learning_agent.memory import ContextSettings, MemoryCreate, MemoryEdit, TopicCreate
 from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
 from learning_agent.references import resolve_references
@@ -335,6 +336,59 @@ def create_app(settings=None, provider=None):
             conversation_id, result["state"]["context_epoch"], profile_id(settings), ready=True
         )
         return {**result, "summary": summary}
+
+    @app.exception_handler(LearningConflict)
+    async def learning_conflict(_request, error):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=409, content={"detail": str(error)})
+
+    @app.get("/api/spaces/{space_id}/learning-topics")
+    async def topics(space_id: str):
+        return store.learning_topics(space_id)
+
+    @app.post("/api/spaces/{space_id}/learning-topics", status_code=201)
+    async def create_topic(space_id: str, payload: TopicCreate):
+        return store.create_learning_topic(space_id, payload.model_dump())
+
+    @app.get("/api/conversations/{conversation_id}/context-settings")
+    async def context_settings(conversation_id: str):
+        return store.context_settings(conversation_id)
+
+    @app.patch("/api/conversations/{conversation_id}/context-settings")
+    async def update_context_settings(conversation_id: str, payload: ContextSettings):
+        try:
+            return store.edit_context_settings(conversation_id, payload.model_dump())
+        except LearningConflict:
+            raise
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.get("/api/spaces/{space_id}/memories")
+    async def memories(space_id: str, topic_id: str):
+        return store.memories(space_id, topic_id)
+
+    @app.post("/api/spaces/{space_id}/memories", status_code=201)
+    async def create_memory(space_id: str, payload: MemoryCreate):
+        try:
+            return store.create_memory(space_id, payload.model_dump())
+        except LearningConflict:
+            raise
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.patch("/api/spaces/{space_id}/memories/{memory_id}")
+    async def update_memory(space_id: str, memory_id: str, payload: MemoryEdit):
+        try:
+            return store.edit_memory(space_id, memory_id, payload.model_dump())
+        except LearningConflict:
+            raise
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.delete("/api/spaces/{space_id}/memories/{memory_id}")
+    async def forget_memory(space_id: str, memory_id: str, revision: int):
+        return store.edit_memory(space_id, memory_id, {"revision": revision}, forget=True)
 
     @app.patch("/api/conversations/{conversation_id}/learning")
     async def edit_learning(conversation_id: str, payload: UserStateEdit):
