@@ -1,12 +1,14 @@
+import asyncio
 import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field, field_validator
 
 from learning_agent.agent import run_turn
 from learning_agent.config import Settings
+from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
 from learning_agent.store import Store
 
@@ -22,11 +24,20 @@ class Text(BaseModel):
         return text.strip()
 
 
+class Focus(BaseModel):
+    material_id: str
+    page: int = Field(ge=1, le=200)
+
+
+class Question(Text):
+    focus: Focus | None = None
+
+
 def create_app(settings=None, provider=None):
     settings = settings or Settings()
     store = Store(settings.data_root)
     model = provider or OpenAIProvider(settings)
-    app = FastAPI(title="Learning Agent · 文字学习主线")
+    app = FastAPI(title="Learning Agent · 资料与页面讲解")
 
     @app.exception_handler(LookupError)
     async def missing(request, error):
@@ -44,8 +55,8 @@ def create_app(settings=None, provider=None):
             "model": settings.model,
             "protocol": settings.protocol,
             "configured": bool(settings.api_key.get_secret_value()) or provider is not None,
-            "materials": ["txt", "md"],
-            "vision": False,
+            "materials": ["txt", "md", "pdf"],
+            "vision": settings.enable_vision,
             "video": False,
             "retrieval": "lexical_baseline",
             "verification": "inspect_actual_run_results",
@@ -67,13 +78,20 @@ def create_app(settings=None, provider=None):
 
     @app.post("/api/spaces/{space_id}/materials", status_code=201)
     async def upload(space_id: str, file: UploadFile):
-        if Path(file.filename or "").suffix.lower() not in {".txt", ".md"}:
-            raise HTTPException(
-                422, "当前主线支持 UTF-8 TXT/Markdown，PDF、图表和影音将在后续阶段加入。"
-            )
-        raw = await file.read(2_000_001)
-        if len(raw) > 2_000_000:
-            raise HTTPException(413, "文字资料限制为2 MB")
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in {".txt", ".md", ".pdf"}:
+            raise HTTPException(422, "支持 UTF-8 TXT/Markdown 和 PDF。影音工具后续加入。")
+        limit = 20_000_000 if suffix == ".pdf" else 2_000_000
+        raw = await file.read(limit + 1)
+        if len(raw) > limit:
+            raise HTTPException(413, "PDF限制20 MB，文字资料限制2 MB")
+        if suffix == ".pdf":
+            try:
+                return await asyncio.to_thread(
+                    store.add_pdf, space_id, (file.filename or "material.pdf")[:200], raw
+                )
+            except PdfError as error:
+                raise HTTPException(422, str(error)) from None
         try:
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
@@ -85,6 +103,22 @@ def create_app(settings=None, provider=None):
     @app.get("/api/spaces/{space_id}/materials/{material_id}")
     async def material(space_id: str, material_id: str):
         return store.material(space_id, material_id)
+
+    @app.get("/api/spaces/{space_id}/materials/{material_id}/pages")
+    async def pages(space_id: str, material_id: str):
+        return store.pages(space_id, material_id)
+
+    @app.get("/api/spaces/{space_id}/materials/{material_id}/pages/{page}")
+    async def page_text(space_id: str, material_id: str, page: int):
+        return store.page(space_id, material_id, page)
+
+    @app.get("/api/spaces/{space_id}/materials/{material_id}/pages/{page}/image")
+    async def page_image(space_id: str, material_id: str, page: int):
+        try:
+            image = await asyncio.to_thread(store.page_image, space_id, material_id, page)
+        except PdfError as error:
+            raise HTTPException(422, str(error)) from None
+        return FileResponse(store.root / image["asset_path"], media_type="image/png")
 
     @app.get("/api/spaces/{space_id}/conversations")
     async def conversations(space_id: str):
@@ -99,12 +133,15 @@ def create_app(settings=None, provider=None):
         return store.messages(conversation_id)
 
     @app.post("/api/conversations/{conversation_id}/messages")
-    async def ask(conversation_id: str, payload: Text):
-        store.get_conversation(conversation_id)
+    async def ask(conversation_id: str, payload: Question):
+        conv = store.get_conversation(conversation_id)
+        focus = payload.focus.model_dump() if payload.focus else None
+        if focus:
+            store.page(conv["space_id"], focus["material_id"], focus["page"])
         if provider is None and not settings.api_key.get_secret_value():
             raise HTTPException(503, "请在本机 .env 中配置 LA_API_KEY；当前不会调用模型。")
         try:
-            return await run_turn(store, model, settings, conversation_id, payload.content)
+            return await run_turn(store, model, settings, conversation_id, payload.content, focus)
         except sqlite3.IntegrityError:
             raise HTTPException(409, "该会话正在回答，请等待完成后再发送。") from None
 

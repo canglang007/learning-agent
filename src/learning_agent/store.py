@@ -26,7 +26,14 @@ class Store:
                     state TEXT NOT NULL, events TEXT NOT NULL DEFAULT '[]', error TEXT);
                 CREATE UNIQUE INDEX IF NOT EXISTS one_running_turn
                     ON runs(conversation_id) WHERE state='running';
+                CREATE TABLE IF NOT EXISTS material_pages (
+                    material_id TEXT NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL,
+                    width REAL NOT NULL, height REAL NOT NULL,
+                    PRIMARY KEY(material_id, page));
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(materials)")}
+            if "format" not in columns:
+                db.execute("ALTER TABLE materials ADD COLUMN format TEXT NOT NULL DEFAULT 'text'")
 
     @contextmanager
     def connect(self):
@@ -59,8 +66,82 @@ class Store:
         path = self.root / "materials" / (item["id"] + ".txt")
         path.write_text(text, encoding="utf-8")
         with self.connect() as db:
-            db.execute("INSERT INTO materials VALUES (:id,:space_id,:name,:text)", item)
+            db.execute(
+                "INSERT INTO materials(id,space_id,name,text) VALUES (:id,:space_id,:name,:text)",
+                item,
+            )
         return {key: value for key, value in item.items() if key != "text"}
+
+    def add_pdf(self, space_id, name, raw):
+        from learning_agent.pdf import extract_pages
+
+        self.require_space(space_id)
+        pages = extract_pages(raw)
+        material_id = str(uuid4())
+        text = "\n\n".join(f"[PDF 第{p['page']}页]\n{p['text']}" for p in pages)
+        (self.root / "materials" / (material_id + ".pdf")).write_bytes(raw)
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO materials(id,space_id,name,text,format) VALUES (?,?,?,?,'pdf')",
+                (material_id, space_id, name, text),
+            )
+            db.executemany(
+                "INSERT INTO material_pages VALUES (?,?,?,?,?)",
+                [(material_id, p["page"], p["text"], p["width"], p["height"]) for p in pages],
+            )
+        return {
+            "id": material_id,
+            "space_id": space_id,
+            "name": name,
+            "format": "pdf",
+            "page_count": len(pages),
+        }
+
+    def pages(self, space_id, material_id):
+        self.material(space_id, material_id)
+        with self.connect() as db:
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT page,length(text) AS text_characters FROM material_pages WHERE material_id=? ORDER BY page",
+                    (material_id,),
+                )
+            ]
+
+    def page(self, space_id, material_id, page):
+        material = self.material(space_id, material_id)
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM material_pages WHERE material_id=? AND page=?", (material_id, page)
+            ).fetchone()
+        if row is None:
+            raise LookupError("该资料没有此 PDF 页面")
+        return {**dict(row), "name": material["name"]}
+
+    def page_image(self, space_id, material_id, page, region=None):
+        from learning_agent.pdf import render_page
+
+        self.page(space_id, material_id, page)
+        suffix = "full" if region is None else "-".join(format(v, ".6f") for v in region)
+        asset = Path("materials") / material_id / f"page-{page}-{suffix}.png"
+        output = self.root / asset
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if output.exists():
+            from PIL import Image
+
+            with Image.open(output) as image:
+                width, height = image.size
+        else:
+            raw, width, height = render_page(
+                self.root / "materials" / (material_id + ".pdf"), page, region
+            )
+            output.write_bytes(raw)
+        return {
+            "asset_path": str(asset),
+            "mime_type": "image/png",
+            "width": width,
+            "height": height,
+        }
 
     def materials(self, space_id):
         self.require_space(space_id)
@@ -68,7 +149,8 @@ class Store:
             return [
                 dict(row)
                 for row in db.execute(
-                    "SELECT id,name FROM materials WHERE space_id=? ORDER BY rowid", (space_id,)
+                    "SELECT m.id,m.name,m.format,(SELECT count(*) FROM material_pages p WHERE p.material_id=m.id) AS page_count FROM materials m WHERE m.space_id=? ORDER BY rowid",
+                    (space_id,),
                 )
             ]
 

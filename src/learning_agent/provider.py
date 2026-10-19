@@ -1,3 +1,5 @@
+import base64
+
 import httpx
 
 from learning_agent.config import Settings
@@ -11,13 +13,39 @@ class OpenAIProvider:
     def __init__(self, settings: Settings, transport=None):
         self.settings, self.transport = settings, transport
 
+    def content(self, message, responses=False):
+        images = message.get("attachments", [])
+        if not images:
+            return message.get("content", "")
+        content = [
+            {"type": "input_text" if responses else "text", "text": message.get("content", "")}
+        ]
+        root = self.settings.data_root.resolve()
+        for attachment in images:
+            path = (root / attachment["asset_path"]).resolve()
+            if not path.is_relative_to(root) or path.suffix != ".png" or not path.is_file():
+                raise ModelError("页面图像产物不可用，请重新查看页面。")
+            if path.stat().st_size > 6_000_000:
+                raise ModelError("页面图像过大，请选择更小区域。")
+            url = "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode()
+            content.append(
+                {"type": "input_image", "image_url": url, "detail": "high"}
+                if responses
+                else {"type": "image_url", "image_url": {"url": url, "detail": "high"}}
+            )
+        return content
+
     async def step(self, history, instructions, tools, allow_tools=True):
         settings = self.settings
         common = {"model": settings.model}
         if settings.protocol == "chat_completions":
-            messages = [
-                {k: v for k, v in item.items() if k != "provider_items"} for item in history
-            ]
+            messages = []
+            for item in history:
+                message = {
+                    k: v for k, v in item.items() if k not in {"provider_items", "attachments"}
+                }
+                message["content"] = self.content(item)
+                messages.append(message)
             payload = {
                 **common,
                 "messages": [{"role": "system", "content": instructions}, *messages],
@@ -39,7 +67,9 @@ class OpenAIProvider:
                         }
                     )
                 else:
-                    items.append({"role": message["role"], "content": message["content"]})
+                    items.append(
+                        {"role": message["role"], "content": self.content(message, responses=True)}
+                    )
             payload = {
                 **common,
                 "instructions": instructions,
