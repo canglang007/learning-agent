@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from learning_agent.learning import Explanation
 from learning_agent.media import MediaError
 from learning_agent.pdf import PdfError
 from learning_agent.retrieval import Retriever
@@ -67,6 +68,7 @@ ARGUMENTS = {
     "read_page": PageArgs,
     "inspect_page": InspectArgs,
     "inspect_media": MediaArgs,
+    "deliver_explanation": Explanation,
 }
 DESCRIPTIONS = {
     "list_materials": "查看当前空间的资料目录，包含格式与PDF物理页数。",
@@ -77,6 +79,7 @@ DESCRIPTIONS = {
     "read_page": "读取PDF指定物理页的提取文字与行号。图表关系/公式排版不能仅凭文字判断，应inspect_page查看。扫描页可能没有提取文字。",
     "inspect_page": "实际查看PDF页面图像以理解图表、公式和排版。page是从1开始的物理页。region=null查看整页，或用左上角原点的归一化[left,top,right,bottom]裁切区域，值在0到1之间。",
     "inspect_media": "读取音视频指定时间段（最多120秒）。transcript读取有时间戳字幕；joint同时抽样最多3帧，受本轮共享图像预算限制。返回字幕来源、实际帧时间和回放链接。不是逐帧观看或直接听音频，缺字幕时不能编造讲话内容。",
+    "deliver_explanation": "最终交付讲解与简短学习工作记录，一次完成、无需后续模型调用。answer为给用户的Markdown正文，其他字段记录主题、卡点及实际讲法，不代表掌握。必须独立于其他工具调用，先看完所需观察再交付。",
 }
 
 
@@ -115,6 +118,11 @@ class MaterialTools:
             return {"error": "unknown_tool", "detail": "工具不存在"}
         try:
             args = ARGUMENTS[name].model_validate(arguments)
+            if name == "deliver_explanation":
+                return {
+                    "error": "requires_conversation",
+                    "detail": "学习工作记录由当前会话执行器处理",
+                }
             if name == "material_outline":
                 return self.retriever.index.outline(
                     self.space_id, args.material_id, args.start, args.limit

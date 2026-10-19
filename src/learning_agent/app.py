@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 from learning_agent.agent import run_turn
 from learning_agent.config import Settings
+from learning_agent.learning import Feedback, FeedbackError
 from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
 from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
@@ -50,6 +51,7 @@ class Focus(BaseModel):
 
 class Question(Text):
     focus: Focus | None = None
+    feedback: Feedback | None = None
 
 
 class Source(BaseModel):
@@ -268,10 +270,23 @@ def create_app(settings=None, provider=None):
             raise HTTPException(503, "请在本机 .env 中配置 LA_API_KEY；当前不会调用模型。")
         try:
             return await run_turn(
-                store, model, settings, conversation_id, payload.content, focus, retriever
+                store,
+                model,
+                settings,
+                conversation_id,
+                payload.content,
+                focus,
+                retriever,
+                payload.feedback.model_dump() if payload.feedback else None,
             )
+        except FeedbackError as error:
+            raise HTTPException(422, str(error)) from None
         except sqlite3.IntegrityError:
             raise HTTPException(409, "该会话正在回答，请等待完成后再发送。") from None
+
+    @app.get("/api/conversations/{conversation_id}/learning")
+    async def learning_state(conversation_id: str):
+        return store.learning_state(conversation_id)
 
     @app.get("/api/runs/{run_id}")
     async def run(run_id: str):

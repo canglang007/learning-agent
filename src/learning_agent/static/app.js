@@ -1,7 +1,9 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2,'0')}`;
-let indexPoll=null, outlineMaterial='';
+let indexPoll=null, outlineMaterial='', feedbackDraft=null, feedbackStarter='';
+const feedbackNames={stuck:'这一步没懂',example:'换个例子',restate:'我来复述',understood:'这一点明白了'};
+const approachNames={clarify:'澄清卡点',prerequisite:'补前置知识',step_by_step:'拆开推导',example:'数值例子',analogy:'类比',source_check:'核对资料',check_restatement:'检查复述',explain:'解释概念',acknowledge:'确认反馈'};
 let space='', conversation='', configured=false, busy=false, focus=null, media=null, poll=null, asr='disabled';
 async function api(path, options={}) {
   const response=await fetch('/api'+path,options), data=await response.json();
@@ -15,6 +17,7 @@ function availability() {
   for(const id of ['send','spaces','conversations','new-conversation']) $(id).disabled=busy;
   document.querySelectorAll('#space-form input,#space-form button,#upload-form input,#upload-form button').forEach(el=>el.disabled=busy);
   $('send').disabled=busy||!conversation||!configured;
+  document.querySelectorAll('.feedback-actions button,#cancel-feedback').forEach(el=>el.disabled=busy);
 }
 function markdown(node,text) {
   // Protect TeX before Markdown consumes backslashes; leave code spans/blocks untouched.
@@ -56,27 +59,31 @@ async function loadSpaces() {
   space=items.find(s=>s.id===localStorage.getItem('learning-space'))?.id||items[0]?.id||'';$('spaces').value=space;await loadSpace(true);
 }
 async function loadSpace(reset=false) {
-  if(reset){clearPosition();$('navigation').hidden=true;}localStorage.setItem('learning-space',space);
+  if(reset){clearFeedback();clearPosition();$('navigation').hidden=true;}localStorage.setItem('learning-space',space);
   const items=space?await api(`/spaces/${space}/materials`):[];
   $('materials').innerHTML=items.map(m=>`<li><button type="button" data-material="${m.id}">${esc(m.name)}${m.format==='pdf'?' · '+m.page_count+'页':m.media_state?' · '+({processing:'准备中',ready:'可回放',failed:'准备失败'}[m.media_state]||m.media_state):''}</button><button type="button" data-outline="${m.id}">查看目录</button></li>`).join('');
   const conversations=space?await api(`/spaces/${space}/conversations`):[];
-  $('conversations').innerHTML=conversations.map(c=>`<option value="${c.id}">${c.id.slice(0,8)}</option>`).join('');
+  $('conversations').innerHTML=conversations.map(c=>`<option value="${c.id}">${esc(c.title||'新会话 '+c.id.slice(0,8))}</option>`).join('');
   await refreshIndex();
   conversation=conversations.find(c=>c.id===conversation)?.id||conversations[0]?.id||'';$('conversations').value=conversation;await loadChat();
 }
 async function loadChat() {
-  const messages=conversation?await api(`/conversations/${conversation}/messages`):[];
+  const selectedConversation=conversation;
+  const messages=selectedConversation?await api(`/conversations/${selectedConversation}/messages`):[];
+  if(selectedConversation!==conversation)return;
   $('chat').replaceChildren();
   if(!messages.length)$('chat').innerHTML='<p>创建会话后提出困惑。你可以直接追问，不必按固定学习流程操作。</p>';
   for(const m of messages) {
     const article=document.createElement('article');article.innerHTML=`<small>${m.role==='user'?'你的问题':'讲解'}</small><div class="body"></div>`;
-    const body=article.querySelector('.body');
+    const body=article.querySelector('.body');if(m.role==='assistant'&&m.run_id)article.id='answer-'+m.run_id;
     if(m.role==='assistant')markdown(body,m.content);else{body.classList.add('user');body.textContent=m.content;}
     if(m.role==='assistant'&&m.run_id) {
       const sources=document.createElement('div');sources.className='sources';article.append(sources);
       const details=document.createElement('details');details.innerHTML='<summary>查看本轮工具与执行状态</summary><pre>加载中…</pre>';article.append(details);
       api(`/runs/${m.run_id}`).then(r=>{
+        if(selectedConversation!==conversation)return;
         linkReferences(body,r.references||[]);
+        if(['completed','budget_exhausted'].includes(r.state))addFeedbackActions(article,m.run_id,body);
         details.querySelector('pre').textContent=JSON.stringify(r,null,2);const seen=new Set();
         for(const event of r.events) {
           const o=event.observation;if(event.type!=='tool'||!o||o.error)continue;
@@ -92,7 +99,7 @@ async function loadChat() {
     }
     $('chat').append(article);
   }
-  availability();
+  await loadLearning();availability();
 }
 async function showPage(id,page) {
   const base=`/spaces/${space}/materials/${id}`, data=await api(`${base}/pages/${page}`), pages=await api(`${base}/pages`);
@@ -154,17 +161,17 @@ function seek() {
   p.play().catch(e=>notice('请点击播放器继续播放：'+e.message,true));
 }
 $('spaces').onchange=guarded(async()=>{space=$('spaces').value;await loadSpace(true);});
-$('conversations').onchange=guarded(async()=>{conversation=$('conversations').value;await loadChat();});
+$('conversations').onchange=guarded(async()=>{clearFeedback();conversation=$('conversations').value;await loadChat();});
 $('space-form').onsubmit=guarded(async e=>{e.preventDefault();const item=await post('/spaces',$('space-name').value);localStorage.setItem('learning-space',item.id);await loadSpaces();notice('资料空间已创建');});
 $('upload-form').onsubmit=guarded(async e=>{
   e.preventDefault();if(!space)throw Error('请先创建资料空间');
   notice('正在上传并检查资料…');const data=new FormData();data.append('file',$('file').files[0]);const item=await api(`/spaces/${space}/materials`,{method:'POST',body:data});
   await loadSpace();if(item.material_id)await showMedia(item.material_id);notice(item.material_id?'音视频已收录，正在后台准备回放。':'资料已就绪');
 });
-$('new-conversation').onclick=guarded(async()=>{if(!space)throw Error('请先创建资料空间');const c=await api(`/spaces/${space}/conversations`,{method:'POST'});await loadSpace();conversation=c.id;$('conversations').value=c.id;await loadChat();});
+$('new-conversation').onclick=guarded(async()=>{clearFeedback();if(!space)throw Error('请先创建资料空间');const c=await api(`/spaces/${space}/conversations`,{method:'POST'});await loadSpace();conversation=c.id;$('conversations').value=c.id;await loadChat();});
 $('ask-form').onsubmit=async e=>{
   e.preventDefault();if(busy||!conversation)return;busy=true;availability();notice('正在理解问题并按需查阅资料…');
-  try{const r=await api(`/conversations/${conversation}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:$('question').value,focus})});$('question').value='';await loadChat();notice(r.state==='completed'?'本轮讲解已完成，可以继续追问。':r.answer,r.state==='failed');}
+  try{const r=await api(`/conversations/${conversation}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:$('question').value,focus,feedback:feedbackDraft?{...feedbackDraft,focus_text:$('feedback-focus').value}:null})});$('question').value='';clearFeedback();await loadChat();notice(r.state==='completed'?'本轮讲解已完成，可以继续追问。':r.answer,r.state==='failed');}
   catch(error){notice(error.message,true);await loadChat();}finally{busy=false;availability();}
 };
 $('materials').onclick=guarded(async e=>{
@@ -203,8 +210,51 @@ $('source-form').onsubmit=guarded(async e=>{
   if(media?.material_id===id)await showMedia(id,selected.start_seconds,selected.end_seconds);
   await refreshIndex();notice('来源已保存，索引需要重新准备。');
 });
+function clearFeedback() {
+  if(feedbackStarter&&$('question').value===feedbackStarter)$('question').value='';feedbackStarter='';
+  feedbackDraft=null;$('feedback-draft').hidden=true;$('feedback-focus').value='';
+}
+function addFeedbackActions(article,runId,body) {
+  const actions=document.createElement('div');actions.className='feedback-actions';
+  for(const [kind,label] of Object.entries(feedbackNames)){
+    const button=document.createElement('button');button.type='button';button.textContent=label;button.disabled=busy;
+    button.onclick=()=>{
+      const selection=window.getSelection(), text=selection&&body.contains(selection.anchorNode)&&body.contains(selection.focusNode)?selection.toString().slice(0,1000):'';
+      feedbackDraft={kind,target_run_id:runId};$('feedback-draft').hidden=false;
+      $('feedback-label').textContent=label+' · ';const target=document.createElement('a');target.href='#answer-'+runId;target.textContent='针对这次讲解（返回查看）';$('feedback-label').append(target,'，发送后才记录。');$('feedback-focus').value=text;
+      const starters={stuck:'这一步我还没懂：',example:'请围绕这个卡点换一个具体例子：',restate:'我的理解是：',understood:'这一点明白了。'};
+      if(!$('question').value.trim()||$('question').value===feedbackStarter){feedbackStarter=starters[kind];$('question').value=feedbackStarter;}
+      $('question').focus();$('ask-form').scrollIntoView({behavior:'smooth',block:'start'});
+    };actions.append(button);
+  }
+  article.append(actions);
+}
+async function loadLearning() {
+  const selected=conversation;$('learning-panel').hidden=!selected;if(!selected)return;
+  const state=await api(`/conversations/${selected}/learning`);if(selected!==conversation)return;
+  const note=state.working_note;$('learning-note').replaceChildren();
+  for(const text of note?[`最近记录的主题：${note.topic}`,`Agent判断的卡点：${note.confusion||'尚未明确'}`,`当前讲法：${approachNames[note.approach]||note.approach}；${note.reason}`]:['尚未记录卡点，可以直接提问或给上一轮讲解反馈。']){
+    const p=document.createElement('p');p.textContent=text;$('learning-note').append(p);
+  }
+  $('learning-attempts').textContent=state.attempts.length?'最近讲解尝试：'+state.attempts.map(a=>approachNames[a.approach]||a.approach).join(' → '):'';
+  $('learning-feedback').replaceChildren();
+  for(const f of state.feedback.slice(-4)){
+    const p=document.createElement('p');p.textContent=`已提交反馈：${feedbackNames[f.kind]}${f.focus_text?'；卡点：'+f.focus_text:''} `;
+    const link=document.createElement('a');link.href='#answer-'+f.target_run_id;link.textContent='返回对应讲解';p.append(link);$('learning-feedback').append(p);
+  }
+}
+$('cancel-feedback').onclick=clearFeedback;
 async function openHash() {
-  const p=new URLSearchParams(location.hash.slice(1)), id=p.get('media');if(!id)return;
+  const p=new URLSearchParams(location.hash.slice(1)), requestedConversation=p.get('conversation'), id=p.get('media');
+  if(requestedConversation){
+    for(const s of await api('/spaces')){
+      if((await api(`/spaces/${s.id}/conversations`)).some(c=>c.id===requestedConversation)){
+        clearFeedback();space=s.id;$('spaces').value=space;conversation=requestedConversation;await loadSpace(true);$('learning-panel').open=true;return;
+      }
+    }
+    notice('当前本机资料空间没有此会话',true);return;
+  }
+  if(!id)return;
   for(const s of await api('/spaces')){
     if((await api(`/spaces/${s.id}/materials`)).some(m=>m.id===id)){
       space=s.id;$('spaces').value=space;await loadSpace(true);await showMedia(id,Number(p.get('start')||0),p.has('end')?Number(p.get('end')):null);return;

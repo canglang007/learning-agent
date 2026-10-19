@@ -2,6 +2,9 @@ import asyncio
 import json
 import time
 
+from pydantic import ValidationError
+
+from learning_agent.learning import LEARNING_GUIDANCE, Explanation, Feedback
 from learning_agent.provider import ModelError
 from learning_agent.retrieval import Retriever
 from learning_agent.tools import MaterialTools, definitions
@@ -32,11 +35,37 @@ PDF引用用[资料名:p页码]，文字用行号。不能把页内文字推断�
 
 
 async def run_turn(
-    store, provider, settings, conversation_id, question, focus=None, retriever=None
+    store, provider, settings, conversation_id, question, focus=None, retriever=None, feedback=None
 ):
     conversation = store.get_conversation(conversation_id)
-    run_id = store.start_run(conversation_id, question)
+    feedback = Feedback.model_validate(feedback).model_dump() if feedback else None
+    learning = store.learning_state(conversation_id)
+    run_id = store.start_run(conversation_id, question, feedback)
     question_context = question
+    if learning["working_note"] or learning["feedback"]:
+        learning = {
+            "working_note": learning["working_note"],
+            "attempts": [
+                {k: a[k] for k in ["run_id", "topic", "approach"]}
+                for a in learning["attempts"][-4:]
+            ],
+            "feedback": [
+                {**f, "content": f["content"][:300], "focus_text": f["focus_text"][:500]}
+                for f in learning["feedback"][-3:]
+            ],
+        }
+        question_context += (
+            "\n[会话学习工作记录，仅供判断、可被用户修正："
+            + json.dumps(learning, ensure_ascii=False)
+            + "]"
+        )
+    if feedback:
+        target = store.feedback_target(conversation_id, feedback["target_run_id"])
+        question_context += (
+            "\n[本轮用户明确提交的学习反馈："
+            + json.dumps({**feedback, "target": target}, ensure_ascii=False)
+            + "]"
+        )
     if focus:
         question_context += (
             "\n[当前查看位置，仅表示用户选中位置，不代表模型已查阅该位置："
@@ -56,6 +85,7 @@ async def run_turn(
         retriever or Retriever(store, settings),
     )
     events, seen, calls_used, images_used = [], set(), 0, 0
+    learning_notes = []
     started = time.monotonic()
     error = None
     state = "completed"
@@ -65,6 +95,8 @@ async def run_turn(
                 allow = index < settings.max_steps - 1 and calls_used < 12
                 instructions = (
                     INSTRUCTIONS
+                    + "\n"
+                    + LEARNING_GUIDANCE
                     + f"\n本轮剩余图像预算：{settings.max_images_per_turn - images_used}张；PDF和视频共享。视频frame_count可选1到3，按问题需要选择并为其他图像留预算。"
                     + ("\n预算已用完，请根据现有信息交付，并说明未完成部分。" if not allow else "")
                 )
@@ -90,7 +122,7 @@ async def run_turn(
                     break
                 if not allow:
                     raise ModelError("模型在预算用完后仍返回工具调用，本轮停止。")
-                images = []
+                images, delivery = [], None
                 for call in calls:
                     name = call["function"]["name"]
                     try:
@@ -108,6 +140,47 @@ async def run_turn(
                                 "error": "duplicate_call",
                                 "detail": "已执行过相同调用，请利用已有结果或调整行动",
                             }
+                        elif name == "deliver_explanation":
+                            if len(calls) != 1:
+                                observation = {
+                                    "error": "deliver_after_observations",
+                                    "detail": "先读取其他工具观察，再独立交付讲解",
+                                }
+                            else:
+                                try:
+                                    result = Explanation.model_validate(args).model_dump()
+                                    delivery = result.pop("answer").strip()
+                                    if not delivery:
+                                        raise ValueError("empty answer")
+                                    # Acknowledging feedback is not a topic switch. In particular,
+                                    # feedback on an older answer must not replace the current card.
+                                    if (
+                                        result["approach"] == "acknowledge"
+                                        and learning["working_note"]
+                                    ):
+                                        result["topic"] = learning["working_note"]["topic"]
+                                        if (
+                                            feedback
+                                            and feedback["target_run_id"]
+                                            != learning["working_note"]["run_id"]
+                                        ):
+                                            result["confusion"] = learning["working_note"][
+                                                "confusion"
+                                            ]
+                                    learning_notes.append(result)
+                                    observation = {
+                                        "answer_delivered": True,
+                                        "working_note": result,
+                                        "detail": "回答与工作判断一起保存；不代表用户掌握",
+                                    }
+                                except (ValidationError, ValueError):
+                                    delivery = None
+                                    observation = {
+                                        "error": "invalid_arguments",
+                                        "detail": "请提供非空answer和符合定义的学习记录，不要添加掌握结论字段",
+                                    }
+                            if not observation.get("error"):
+                                seen.add(fingerprint)
                         else:
                             observation = await asyncio.to_thread(
                                 tools.execute,
@@ -152,6 +225,9 @@ async def run_turn(
                         }
                     )
                     store.save_events(run_id, events)
+                if delivery is not None:
+                    content = delivery
+                    break
                 if images:
                     # One labeled image per message keeps timestamps unambiguous in both protocols.
                     for image, label in images:
@@ -174,5 +250,5 @@ async def run_turn(
             {"role": "assistant", "content": f"[系统状态：上一轮执行失败，未完成讲解。{error}]"},
         ]
     store.save_events(run_id, events)
-    store.finish_run(run_id, state, content, history, error)
+    store.finish_run(run_id, state, content, history, error, learning_notes)
     return {"run_id": run_id, "state": state, "answer": content}

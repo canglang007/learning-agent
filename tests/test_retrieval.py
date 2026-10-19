@@ -189,3 +189,20 @@ def test_compatible_embedding_order_validation_and_secret_free_errors(monkeypatc
     with pytest.raises(EmbeddingError) as error:
         retrieval.Embedder(settings).embed(["private text"])
     assert "private" not in str(error.value) and "upstream" not in str(error.value)
+
+
+def test_explicit_course_identifier_scopes_documents_without_title_boost():
+    from learning_agent.retrieval import course_scope
+
+    chunks = [
+        {"id": "p", "name": "cs336-architecture.pdf", "excerpt": "CS336 course cover"},
+        {"id": "v", "name": "cs336-first45min.mp4", "excerpt": "rotary embeddings"},
+        {"id": "other", "name": "ntu-agent.pdf", "excerpt": "CS336 mentioned in another course"},
+    ]
+    selected, query, ids = course_scope("CS336旋转位置编码如何起作用？", chunks)
+    assert ids == ["p", "v"] and [c["id"] for c in selected] == ["p", "v"]
+    assert "cs336" not in query.casefold()
+    selected, query, ids = course_scope("位置编码", chunks)
+    assert selected == chunks and ids == [] and query == "位置编码"
+    # A course-directory query remains searchable instead of becoming an empty vector input.
+    assert course_scope("CS336", chunks)[1] == "CS336"

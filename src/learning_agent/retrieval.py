@@ -59,6 +59,27 @@ def fuse(*rankings, k=60):
     return sorted(scores, key=lambda i: (-scores[i], i)), scores
 
 
+def course_scope(query, chunks):
+    """Match explicit course identifiers to filenames, not to the lecture cover text."""
+    identifiers = {
+        word
+        for word in tokenize(query)
+        if re.fullmatch(r"[a-z]+[a-z0-9]*\d[a-z0-9]*", word)
+        and any(word in re.split(r"[^a-z0-9]+", c["name"].casefold()) for c in chunks)
+    }
+    if not identifiers:
+        return chunks, query, []
+    selected = [
+        c for c in chunks if identifiers.intersection(re.split(r"[^a-z0-9]+", c["name"].casefold()))
+    ]
+    cleaned = query
+    for identifier in identifiers:
+        cleaned = re.sub(
+            r"(?<![a-z0-9])" + re.escape(identifier) + r"(?![a-z0-9])", " ", cleaned, flags=re.IGNORECASE
+        )
+    return selected, cleaned.strip() or query, sorted({c["id"] for c in selected})
+
+
 class EmbeddingError(Exception):
     pass
 
@@ -420,9 +441,10 @@ class Retriever:
 
     def search(self, space, query, material_id=None):
         chunks = self.index.chunks(space, material_id)
+        chunks, search_query, scoped_ids = course_scope(query, chunks)
         if not chunks:
             return {"hits": [], "retrieval": "bm25", "dense_status": "no_searchable_text"}
-        scores = bm25(query, [c["excerpt"] for c in chunks])
+        scores = bm25(search_query, [c["excerpt"] for c in chunks])
         lexical = sorted(
             (i for i, score in enumerate(scores) if score > 0), key=lambda i: (-scores[i], i)
         )
@@ -436,7 +458,7 @@ class Retriever:
             )
             if len(vectors) == len(chunks) and self.settings.embedding_provider != "disabled":
                 try:
-                    vector = self.embedder.embed([query])[0]
+                    vector = self.embedder.embed([search_query])[0]
                     if any(len(v) != len(vector) for v in vectors.values()):
                         raise EmbeddingError(
                             "embedding_dimension_changed:rebuild_with_new_model_id"
@@ -472,5 +494,10 @@ class Retriever:
             "hits": hits,
             "retrieval": mode,
             "dense_status": dense_status,
+            "scope": {
+                "material_ids": scoped_ids,
+                "query": search_query,
+                "reason": "explicit_course_identifier" if scoped_ids else "caller_or_space",
+            },
             "detail": "排名是候选线索，不是正确性置信度。可改写查询、限定资料、读取相邻段落或查看目录。",
         }

@@ -48,6 +48,12 @@ class Store:
                 CREATE TABLE IF NOT EXISTS chunk_vectors (
                     chunk_id TEXT NOT NULL, encoder TEXT NOT NULL, vector TEXT NOT NULL,
                     PRIMARY KEY(chunk_id,encoder));
+                CREATE TABLE IF NOT EXISTS learning_feedback (
+                    run_id TEXT PRIMARY KEY, target_run_id TEXT NOT NULL,
+                    kind TEXT NOT NULL, focus_text TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS learning_notes (
+                    seq INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL, note TEXT NOT NULL);
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(materials)")}
             if "format" not in columns:
@@ -342,7 +348,9 @@ class Store:
     def set_source(self, space_id, material_id, source):
         self.material(space_id, material_id)
         with self.connect() as db:
-            db.execute("UPDATE materials SET source=? WHERE id=?", (json.dumps(source), material_id))
+            db.execute(
+                "UPDATE materials SET source=? WHERE id=?", (json.dumps(source), material_id)
+            )
             self.invalidate_index(db, material_id)
         return source
 
@@ -411,7 +419,7 @@ class Store:
             return [
                 dict(row)
                 for row in db.execute(
-                    "SELECT id,space_id FROM conversations WHERE space_id=? ORDER BY rowid DESC",
+                    "SELECT c.id,c.space_id,(SELECT substr(m.content,1,45) FROM messages m WHERE m.conversation_id=c.id AND m.role='user' ORDER BY m.seq LIMIT 1) AS title FROM conversations c WHERE c.space_id=? ORDER BY c.rowid DESC",
                     (space_id,),
                 )
             ]
@@ -427,9 +435,22 @@ class Store:
                 )
             ]
 
-    def start_run(self, conversation_id, content):
+    def start_run(self, conversation_id, content, feedback=None):
+        from learning_agent.learning import FeedbackError
+
         run_id = str(uuid4())
         with self.connect() as db:
+            if feedback:
+                target = db.execute(
+                    "SELECT r.conversation_id,r.state FROM runs r JOIN messages m ON m.run_id=r.id AND m.role='assistant' WHERE r.id=?",
+                    (feedback["target_run_id"],),
+                ).fetchone()
+                if (
+                    not target
+                    or target["conversation_id"] != conversation_id
+                    or target["state"] not in {"completed", "budget_exhausted"}
+                ):
+                    raise FeedbackError("反馈需要指向当前会话中已完成的讲解")
             db.execute(
                 "INSERT INTO runs(id,conversation_id,state) VALUES (?,?,'running')",
                 (run_id, conversation_id),
@@ -438,13 +459,18 @@ class Store:
                 "INSERT INTO messages(conversation_id,role,content,run_id) VALUES (?,'user',?,?)",
                 (conversation_id, content, run_id),
             )
+            if feedback:
+                db.execute(
+                    "INSERT INTO learning_feedback VALUES (?,?,?,?)",
+                    (run_id, feedback["target_run_id"], feedback["kind"], feedback["focus_text"]),
+                )
         return run_id
 
     def save_events(self, run_id, events):
         with self.connect() as db:
             db.execute("UPDATE runs SET events=? WHERE id=?", (json.dumps(events), run_id))
 
-    def finish_run(self, run_id, state, content, protocol, error=None):
+    def finish_run(self, run_id, state, content, protocol, error=None, learning_notes=()):
         with self.connect() as db:
             row = db.execute("SELECT conversation_id FROM runs WHERE id=?", (run_id,)).fetchone()
             db.execute("UPDATE runs SET state=?,error=? WHERE id=?", (state, error, run_id))
@@ -456,6 +482,49 @@ class Store:
                 "UPDATE conversations SET protocol=? WHERE id=?",
                 (json.dumps(protocol), row["conversation_id"]),
             )
+            if state in {"completed", "budget_exhausted"}:
+                db.executemany(
+                    "INSERT INTO learning_notes(conversation_id,run_id,note) VALUES (?,?,?)",
+                    [
+                        (row["conversation_id"], run_id, json.dumps(note, ensure_ascii=False))
+                        for note in learning_notes
+                    ],
+                )
+
+    def learning_state(self, conversation_id):
+        self.get_conversation(conversation_id)
+        with self.connect() as db:
+            notes = db.execute(
+                "SELECT run_id,note FROM learning_notes WHERE conversation_id=? ORDER BY seq DESC LIMIT 6",
+                (conversation_id,),
+            ).fetchall()
+            feedback = db.execute(
+                "SELECT f.*,m.content,r.state AS response_state FROM learning_feedback f JOIN runs r ON r.id=f.run_id JOIN messages m ON m.run_id=f.run_id AND m.role='user' WHERE r.conversation_id=? ORDER BY m.seq DESC LIMIT 8",
+                (conversation_id,),
+            ).fetchall()
+        attempts = [{"run_id": row["run_id"], **json.loads(row["note"])} for row in reversed(notes)]
+        return {
+            "working_note": attempts[-1] if attempts else None,
+            "attempts": attempts,
+            "feedback": [dict(row) for row in reversed(feedback)],
+            "detail": "工作记录是Agent可修正的判断；明白了是用户对所指回答的自述，不代表客观掌握。",
+        }
+
+    def feedback_target(self, conversation_id, target_run_id):
+        from learning_agent.learning import FeedbackError
+
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT m.content FROM messages m JOIN runs r ON r.id=m.run_id WHERE r.id=? AND r.conversation_id=? AND m.role='assistant'",
+                (target_run_id, conversation_id),
+            ).fetchone()
+        if not row:
+            raise FeedbackError("反馈所指的讲解不在当前会话")
+        return {
+            "run_id": target_run_id,
+            "answer": row["content"][:8000],
+            "truncated": len(row["content"]) > 8000,
+        }
 
     def run(self, run_id):
         with self.connect() as db:
