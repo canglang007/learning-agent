@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from learning_agent.learning import Explanation
-from learning_agent.media import MediaError
+from learning_agent.media import MediaError, sample_times
 from learning_agent.pdf import PdfError
 from learning_agent.retrieval import Retriever
 from learning_agent.store import Store
@@ -199,9 +199,7 @@ class MaterialTools:
                 images = []
                 if args.mode == "joint" and self.vision and info["has_video"]:
                     count = min(args.frame_count, image_budget)
-                    for index in range(count):
-                        seconds = round(start + (end - start) * (index + 0.5) / count, 3)
-                        seconds = min(seconds, info["duration"] - 0.001)
+                    for seconds in sample_times(start, end, count, duration=info["duration"]):
                         images.append(
                             self.store.media_frame(self.space_id, args.material_id, seconds)
                         )

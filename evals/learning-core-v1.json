@@ -1189,6 +1189,50 @@
           "actions": []
         }
       ]
+    },
+    {
+      "id": "english_attention",
+      "family": "english_attention",
+      "split": "dev",
+      "tags": ["english", "retrieval"],
+      "settings": {"max_steps": 4, "enable_context_summary": false},
+      "turns": [
+        {"id": "explain", "conversation": "main", "input": {"question": "Explain in plain English why self-attention needs both queries and keys."}, "gold": {"required_concepts": ["queries express what a position is looking for and keys express what each position offers"], "evidence_targets": []}, "actions": []},
+        {"id": "followup", "conversation": "main", "input": {"question": "Give a two-token example and state what the value vectors contribute."}, "gold": {"required_concepts": ["values carry the content aggregated after attention weights are computed"]}, "actions": []}
+      ]
+    },
+    {
+      "id": "zh_chart",
+      "family": "zh_chart",
+      "split": "dev",
+      "tags": ["chinese", "chart"],
+      "settings": {"max_steps": 4, "enable_context_summary": false},
+      "turns": [
+        {"id": "explain", "conversation": "main", "input": {"question": "图表中训练损失下降但验证损失上升，应该如何解释？"}, "gold": {"required_concepts": ["训练集与验证集趋势分离通常提示过拟合，应结合数据划分和正则化判断"], "evidence_targets": []}, "actions": []},
+        {"id": "followup", "conversation": "main", "input": {"question": "给出两个可以验证这个判断的实验。"}, "gold": {"required_concepts": ["比较训练验证曲线并改变正则化或数据量来验证过拟合解释"]}, "actions": []}
+      ]
+    },
+    {
+      "id": "silent_video",
+      "family": "silent_video",
+      "split": "holdout",
+      "tags": ["video", "no_caption"],
+      "settings": {"max_steps": 4, "enable_context_summary": false},
+      "turns": [
+        {"id": "explain", "conversation": "main", "input": {"question": "这个没有字幕的视频片段在 00:20–00:50 做了什么？请区分画面观察和推断。"}, "gold": {"required_concepts": ["说明观察到的画面证据，并明确没有字幕时不能把推断当作讲者原话"], "evidence_targets": []}, "actions": []},
+        {"id": "followup", "conversation": "main", "input": {"question": "如何让我回放最关键的时间点？"}, "gold": {"required_concepts": ["给出可回放的起止时间并说明时间锚点来自媒体文件"], "evidence_targets": []}, "actions": []}
+      ]
+    },
+    {
+      "id": "cross_turn_correction",
+      "family": "cross_turn_correction",
+      "split": "holdout",
+      "tags": ["feedback", "state"],
+      "settings": {"max_steps": 4, "enable_context_summary": true},
+      "turns": [
+        {"id": "explain", "conversation": "main", "input": {"question": "我认为 batch normalization 会把每个样本单独归一化，对吗？"}, "gold": {"required_concepts": ["指出 batch normalization 使用批次统计量而不是每个样本独立统计量"], "evidence_targets": []}, "actions": []},
+        {"id": "followup", "conversation": "main", "input": {"question": "我刚才把它和 layer normalization 混淆了，请结合这个更正重新解释。"}, "gold": {"required_concepts": ["回应用户更正并清楚比较 batch normalization 与 layer normalization 的归一化维度"]}, "actions": []}
+      ]
     }
   ]
 }

@@ -145,6 +145,24 @@ def frame(source, target, seconds):
         temporary.unlink(missing_ok=True)
 
 
+def sample_times(start, end, count, *, duration=None):
+    """Return stable interior keyframe times for a bounded media window.
+
+    Interior points avoid duplicate boundary frames and keep the visual evidence
+    evenly distributed when a joint inspection has a small image budget.
+    """
+    if count <= 0 or end <= start:
+        return []
+    limit = end if duration is None else min(end, duration)
+    span = limit - start
+    if span <= 0:
+        return []
+    return [
+        round(min(limit - 0.001, start + span * (index + 0.5) / count), 3)
+        for index in range(count)
+    ]
+
+
 def _extract_frame(source, target, seconds):
     command(
         [
