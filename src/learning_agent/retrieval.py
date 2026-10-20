@@ -117,32 +117,64 @@ class Embedder:
                 )
                 response.raise_for_status()
                 body = response.json()
-            if s.embedding_provider == "ollama":
-                vectors = body["embeddings"]
-            else:
-                rows = sorted(body["data"], key=lambda r: r["index"])
-                if [row["index"] for row in rows] != list(range(len(texts))):
-                    raise ValueError("invalid indices")
-                vectors = [row["embedding"] for row in rows]
-            if len(vectors) != len(texts) or not vectors:
-                raise ValueError("invalid count")
-            dimension = len(vectors[0])
-            normalized = []
-            for vector in vectors:
-                if (
-                    not dimension
-                    or len(vector) != dimension
-                    or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in vector)
-                ):
-                    raise ValueError("invalid vector")
-                norm = math.sqrt(sum(x * x for x in vector))
-                if not norm:
-                    raise ValueError("zero vector")
-                normalized.append([x / norm for x in vector])
-            return normalized
+            return self.decode(body, len(texts))
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
             # Never return upstream bodies, request headers, keys or private text in errors.
             raise EmbeddingError("embedding_request_failed:" + type(error).__name__) from None
+
+    def decode(self, body, count):
+        if self.settings.embedding_provider == "ollama":
+            vectors = body["embeddings"]
+        else:
+            rows = sorted(body["data"], key=lambda r: r["index"])
+            if [row["index"] for row in rows] != list(range(count)):
+                raise ValueError("invalid indices")
+            vectors = [row["embedding"] for row in rows]
+        if len(vectors) != count or not vectors:
+            raise ValueError("invalid count")
+        dimension = len(vectors[0])
+        normalized = []
+        for vector in vectors:
+            if (
+                not dimension
+                or len(vector) != dimension
+                or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in vector)
+            ):
+                raise ValueError("invalid vector")
+            norm = math.sqrt(sum(x * x for x in vector))
+            if not norm:
+                raise ValueError("zero vector")
+            normalized.append([x / norm for x in vector])
+        return normalized
+
+    async def embed_async(self, texts):
+        s = self.settings
+        if s.embedding_provider == "disabled":
+            raise EmbeddingError("embedding_disabled")
+        path = "/api/embed" if s.embedding_provider == "ollama" else "/embeddings"
+        payload = {"model": s.embedding_model, "input": texts}
+        if s.embedding_provider == "ollama":
+            payload["truncate"] = False
+        headers = {}
+        if s.embedding_api_key.get_secret_value():
+            headers["Authorization"] = "Bearer " + s.embedding_api_key.get_secret_value()
+        try:
+            async with httpx.AsyncClient(timeout=s.embedding_timeout_seconds) as client:
+                response = await client.post(
+                    s.embedding_base_url.rstrip("/") + path, json=payload, headers=headers
+                )
+                response.raise_for_status()
+                return self.decode(response.json(), len(texts))
+        except httpx.RequestError:
+            error = EmbeddingError("embedding_request_failed:result_unknown")
+            error.outcome = "unknown"
+            raise error from None
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as cause:
+            error = EmbeddingError("embedding_request_failed:" + type(cause).__name__)
+            error.outcome = (
+                "returned_invalid" if not isinstance(cause, httpx.HTTPError) else "failed"
+            )
+            raise error from None
 
 
 class CourseIndex:
@@ -490,7 +522,7 @@ class Retriever:
             )
             if len(vectors) == len(chunks) and self.settings.embedding_provider != "disabled":
                 try:
-                    vector = self.embedder.embed([search_query])[0]
+                    vector = getattr(self, "query_embed", self.embedder.embed)([search_query])[0]
                     if any(len(v) != len(vector) for v in vectors.values()):
                         raise EmbeddingError(
                             "embedding_dimension_changed:rebuild_with_new_model_id"

@@ -19,6 +19,7 @@ MEDIA_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".mp3", ".m4a", ".wav", ".ogg
 _asr_lock = threading.Lock()
 _models = {}
 _worker_lock_fd = ContextVar("worker_lock_fd", default=None)
+_render_process_group = ContextVar("render_process_group", default=False)
 
 
 class MediaError(ValueError):
@@ -34,7 +35,7 @@ def command(args, timeout=180):
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
+            start_new_session=not _render_process_group.get(),
             pass_fds=() if lock_fd is None else (lock_fd,),
         )
         try:
@@ -45,7 +46,10 @@ def command(args, timeout=180):
         finally:
             if process.poll() is None:
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    if _render_process_group.get():
+                        process.kill()
+                    else:
+                        os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 process.wait()
@@ -132,6 +136,10 @@ def frame(source, target, seconds):
         temporary = Path(file.name)
     try:
         _extract_frame(source, temporary, seconds)
+        from learning_agent.assets import png_size
+
+        if png_size(temporary) is None:
+            raise MediaError("抽帧结果不可解码，未发布缓存")
         temporary.replace(target)
     finally:
         temporary.unlink(missing_ok=True)

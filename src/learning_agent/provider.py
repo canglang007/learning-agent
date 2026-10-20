@@ -11,6 +11,11 @@ from learning_agent.config import Settings
 class ModelError(Exception):
     """Sanitized provider failure; do not expose upstream bodies or credentials."""
 
+    def __init__(self, message, *, outcome="failed"):
+        super().__init__(message)
+        self.outcome = outcome
+        self.usage = None
+
 
 def wire_bytes(payload):
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
@@ -208,9 +213,16 @@ class OpenAIProvider:
             raise ModelError(
                 f"模型服务返回 HTTP {error.response.status_code}，请检查协议、型号或额度。"
             ) from None
-        except (httpx.RequestError, ValueError):
-            raise ModelError("模型服务连接失败、超时或返回了无效 JSON。") from None
-        return self.parse_response(data)
+        except httpx.RequestError:
+            raise ModelError("模型服务连接失败或超时，请求结果未知。", outcome="unknown") from None
+        except ValueError:
+            raise ModelError("模型服务返回无效 JSON。", outcome="returned_invalid") from None
+        try:
+            return self.parse_response(data)
+        except ModelError as error:
+            error.outcome = "returned_invalid"
+            error.usage = data.get("usage") if isinstance(data, dict) else None
+            raise
 
     def parse_response(self, data):
         settings = self.settings

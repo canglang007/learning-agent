@@ -66,6 +66,12 @@ class RunQuestion(Question):
     client_request_id: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class ResumeRequest(BaseModel):
+    action_id: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$")
+    expected_revision: int = Field(ge=0)
+    acknowledge_unknown_request: bool = False
+
+
 class Source(BaseModel):
     url: HttpUrl | None = Field(default=None, max_length=2048)
     start_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
@@ -401,6 +407,20 @@ def create_app(settings=None, provider=None):
         store.cancel_run(run_id)
         runtime.wake.set()
         return store.public_run(run_id)
+
+    @app.post("/api/runs/{run_id}/resume", status_code=202)
+    async def resume_run(run_id: str, payload: ResumeRequest):
+        if runtime.task is None or runtime.task.done() or runtime.stopping:
+            raise RuntimeUnavailable("问答调度器尚未就绪")
+        result = store.resume_run(
+            run_id,
+            settings,
+            payload.action_id,
+            payload.expected_revision,
+            payload.acknowledge_unknown_request,
+        )
+        runtime.wake.set()
+        return result
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(

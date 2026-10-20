@@ -1,5 +1,5 @@
 const pendingRunStates=['queued','running','cancelling','interrupted'];
-const runStateNames={queued:'等待执行',running:'正在处理',cancelling:'正在停止当前操作',interrupted:'本轮已中断，请结束后重新提问',completed:'讲解已完成',budget_exhausted:'已在预算限制下交付',failed:'本轮未完成',cancelled:'本轮已停止'};
+const runStateNames={queued:'等待执行',running:'正在处理',cancelling:'正在停止当前操作',interrupted:'本轮已中断',completed:'讲解已完成',budget_exhausted:'已在预算限制下交付',failed:'本轮未完成',cancelled:'本轮已停止'};
 const toolNames={list_materials:'查看资料目录',search_materials:'搜索资料',material_outline:'查看资料导航',read_context:'补读前后文',read_passage:'读取文字',read_page:'读取PDF文字',inspect_page:'查看PDF图像',inspect_media:'查阅音视频片段',recall_learning_context:'核对历史原话',deliver_explanation:'交付讲解'};
 let runtimeBinding=0, runtimeSource=null, runtimeTimer=null, selectedRun=null, runtimeCursor=0;
 const submissionKey=cid=>'learning-submit:'+cid;
@@ -11,18 +11,22 @@ function runEventLabel(event){
   if(event.type==='tool.finished')return (toolNames[p.name]||'资料工具')+(p.error?'：未取得所需结果':'：已返回')+(p.page?' · 第'+p.page+'页':'');
   if(event.type==='model.started')return p.purpose==='summary'?'正在整理历史摘要':'正在理解问题并组织讲解';
   if(event.type==='model.finished')return p.purpose==='summary'?'摘要请求已返回':'模型已返回，正在处理结果';
-  return {'run.accepted':'问题已保存','run.started':'开始处理','run.cancel_requested':'已收到停止请求','run.interrupted':'执行已中断，已有记录保留','run.completed':'本轮讲解已保存','run.failed':'本轮未完成','run.cancelled':'本轮已停止','context.reduced':'已按预算选择历史与图像','summary.finished':'历史整理已结束'}[event.type]||'任务状态已更新';
+  return {'run.accepted':'问题已保存','run.started':'开始处理','run.resumed':'已接续本轮执行','asset.restored':'已重新生成缺失图像','run.cancel_requested':'已收到停止请求','run.interrupted':'执行已中断，已有记录保留','run.completed':'本轮讲解已保存','run.failed':'本轮未完成','run.cancelled':'本轮已停止','context.reduced':'已按预算选择历史与图像','summary.finished':'历史整理已结束'}[event.type]||'任务状态已更新';
 }
 function appendRunEvents(events){
   for(const event of events){if(event.seq<=runtimeCursor)continue;runtimeCursor=event.seq;const li=document.createElement('li');li.textContent=runEventLabel(event);$('runtime-progress').append(li);}
   while($('runtime-progress').children.length>8)$('runtime-progress').firstChild.remove();
 }
 function paintRun(run){
+  if(!selectedRun||selectedRun.id!==run.id||selectedRun.revision!==run.revision)$('runtime-retry-ack').checked=false;
   selectedRun=run;$('runtime-panel').hidden=false;$('runtime-state').textContent=runStateNames[run.state]||run.state;
   busy=pendingRunStates.includes(run.state);availability();
   $('runtime-cancel').hidden=!run.allowed_actions.includes('cancel');$('runtime-cancel').disabled=run.state==='cancelling';
   $('runtime-cancel').textContent=run.state==='interrupted'?'结束此轮，重新提问':run.state==='queued'?'取消排队':'停止本轮';
-  $('runtime-hint').textContent=run.state==='interrupted'?'当前版本保留中断记录，尚不能从中间步骤续跑；结束此轮后可重新提问。':run.state==='cancelling'?'正在结束已开始的操作；已发出的远端请求可能仍会计费。':busy?'刷新或关闭页面不会取消任务。':'';
+  const retry=run.state==='interrupted'&&run.allowed_actions.includes('retry_model'),resume=run.state==='interrupted'&&run.allowed_actions.includes('resume');
+  $('runtime-resume').hidden=!retry&&!resume;$('runtime-resume').textContent=retry?'确认后重试模型请求':'继续本轮';
+  $('runtime-retry-warning').hidden=!retry;$('runtime-resume').disabled=retry&&!$('runtime-retry-ack').checked;
+  $('runtime-hint').textContent=run.state==='interrupted'?(retry?'先前主模型请求结果未知，当前不会自动重发；可以确认后重试，或结束此轮。':resume?'已保存执行位置，可继续本轮。':'上下文、资料版本或恢复预算不允许继续，请结束此轮后重新提问。'):run.state==='cancelling'?'正在结束已开始的操作；已发出的远端请求可能仍会计费。':busy?'刷新或关闭页面不会取消任务。':'';
 }
 async function refreshRuntime(binding,cid,runId){
   try{
@@ -58,6 +62,8 @@ async function bindRuntime(){
     const runs=await api(`/conversations/${cid}/runs?limit=1`);if(binding!==runtimeBinding||cid!==conversation)return;
     if(!runs.length){busy=false;$('runtime-panel').hidden=!savedSubmission(cid);$('runtime-state').textContent=savedSubmission(cid)?'上次提交尚未确认，请重试确认。':'';$('runtime-cancel').hidden=true;availability();return;}
     const run=runs[0];paintRun(run);
+    // The message GET can precede commit while this status GET observes completion.
+    if(!pendingRunStates.includes(run.state)&&run.answer&&!$('answer-'+run.id)){await loadChat();return;}
     const events=await api(`/runs/${run.id}/events?after=${Math.max(0,run.last_event_seq-8)}`);if(binding!==runtimeBinding||cid!==conversation)return;
     runtimeCursor=Math.max(0,run.last_event_seq-8);appendRunEvents(events);
     if(pendingRunStates.includes(run.state))subscribeRun(binding,cid,run);
@@ -85,4 +91,16 @@ $('runtime-cancel').onclick=guarded(async()=>{
 $('runtime-retry-submit').onclick=guarded(async()=>{
   const cid=conversation,payload=savedSubmission(cid);if(!payload)return;
   await sendRuntimePayload(cid,payload);
+});
+
+$('runtime-retry-ack').onchange=()=>{if(selectedRun)paintRun(selectedRun);};
+const recoveryActionKey=rid=>'learning-recovery:'+rid;
+$('runtime-resume').onclick=guarded(async()=>{
+  const cid=conversation,run=selectedRun;if(!run)return;
+  const ack=run.allowed_actions.includes('retry_model');if(ack&&!$('runtime-retry-ack').checked)return;
+  let action;try{action=JSON.parse(localStorage.getItem(recoveryActionKey(run.id))||'null');}catch{}
+  if(!action||action.expected_revision!==run.revision)action={action_id:crypto.randomUUID(),expected_revision:run.revision,acknowledge_unknown_request:ack};
+  localStorage.setItem(recoveryActionKey(run.id),JSON.stringify(action));$('runtime-resume').disabled=true;
+  try{await api(`/runs/${run.id}/resume`,jsonOptions('POST',action));localStorage.removeItem(recoveryActionKey(run.id));}
+  finally{if(cid===conversation){$('runtime-retry-ack').checked=false;await loadChat();}}
 });

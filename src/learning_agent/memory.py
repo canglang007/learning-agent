@@ -367,6 +367,8 @@ class MemoryStore:
                         "UPDATE run_inputs SET payload=? WHERE run_id=?",
                         (json.dumps(payload), frozen["run_id"]),
                     )
+                    # Terminal execution snapshots contain derived injected messages too.
+                    db.execute("DELETE FROM run_checkpoints WHERE run_id=?", (frozen["run_id"],))
                 for turn in db.execute(
                     "SELECT p.conversation_id,p.turn_seq,p.raw_input FROM protocol_turns p "
                     "JOIN conversations c ON c.id=p.conversation_id WHERE c.space_id=? "

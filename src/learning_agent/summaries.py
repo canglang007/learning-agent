@@ -91,10 +91,11 @@ async def maybe_summarize(
         return previous, None
     end = eligible[-1]["turn_seq"]
     attempt = store.latest_summary_attempt(conversation_id, state["context_epoch"], profile)
+    resume_operation = store.operation_at(control.run_id, "summary:0") if control else None
     watermark = attempt["covered_end"] if attempt else 0
-    if end - watermark < settings.summary_min_new_turns:
+    if end - watermark < settings.summary_min_new_turns and not resume_operation:
         return previous, None
-    attempt_id = str(uuid4())
+    attempt_id = resume_operation["input_ref"]["summary_id"] if resume_operation else str(uuid4())
     manifest = [{"turn_seq": t["turn_seq"], "run_id": t["run_id"]} for t in eligible]
     # Re-read old salient sources; do not recursively summarize previous generated prose.
     old_ids = list(
@@ -203,6 +204,7 @@ async def maybe_summarize(
                     lambda: summarizer.step(history, SUMMARY_INSTRUCTIONS, tools, True),
                     step=prepared.snapshot.get("step", 0),
                     purpose="summary",
+                    input_ref={"summary_id": attempt_id, "covered_end": end},
                 )
             else:
                 message, usage = await summarizer.step(history, SUMMARY_INSTRUCTIONS, tools, True)

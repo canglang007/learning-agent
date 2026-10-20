@@ -283,6 +283,16 @@ def test_same_turn_image_restore_reuses_asset_and_duplicate_guard_still_stops(
         {"role": "assistant", "content": "图像已经重新附加。"},
     ]
     executions = []
+    from learning_agent import render_process
+
+    render = render_process.render_tool
+    renders = []
+
+    async def tracked_render(*args, **kwargs):
+        renders.append(args[2])
+        return await render(*args, **kwargs)
+
+    monkeypatch.setattr(render_process, "render_tool", tracked_render)
     execute = MaterialTools.execute
 
     def tracked(self, name, arguments, **kwargs):
@@ -311,7 +321,8 @@ def test_same_turn_image_restore_reuses_asset_and_duplicate_guard_still_stops(
         if e["type"] == "tool"
     ]
     assert observations[2]["context_reattached"] and observations[3]["error"] == "duplicate_call"
-    assert executions.count("inspect_page") == 1
+    assert renders.count("inspect_page") == 1
+    assert executions.count("read_passage") == 1
 
 
 def test_missing_old_image_becomes_notice_but_current_valid_image_is_retained(tmp_path):
@@ -331,17 +342,20 @@ def test_missing_old_image_becomes_notice_but_current_valid_image_is_retained(tm
     assert "image_unavailable" in json.dumps(model.inputs[-1])
 
 
-def test_corrupt_current_image_is_tool_observation_and_does_not_leave_running_lock(tmp_path):
+def test_corrupt_current_image_is_regenerated_and_does_not_leave_running_lock(tmp_path):
     client, space, material, conv, model = pdf_setup(tmp_path)
     asset = Store(tmp_path).page_image(space, material, 2)
     (tmp_path / asset["asset_path"]).write_bytes(b"corrupt cached png")
     model.responses = [
         call("inspect_page", {"material_id": material, "page": 2, "region": None}),
-        {"role": "assistant", "content": "当前图像不可用，无法核实视觉细节。"},
+        {"role": "assistant", "content": "图像已重新生成，可以核实视觉细节。"},
     ]
     result = client.post(f"/api/conversations/{conv}/messages", json={"content": "看图"}).json()
     assert result["state"] == "completed"
-    assert json.loads(model.inputs[-1][-1]["content"])["error"] == "asset_unavailable"
+    assert any(m.get("attachments") for m in model.inputs[-1])
+    from learning_agent.provider import asset_info
+
+    assert asset_info(tmp_path, asset)["width"] > 0
     assert Store(tmp_path).run(result["run_id"])["state"] != "running"
 
 

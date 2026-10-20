@@ -333,7 +333,7 @@ def test_frozen_profile_mismatch_interrupts_queued_run_without_calling_model(tmp
     queued = submit(client, second).json()["run_id"]
     client.app.state.runtime.settings.model = "changed-model"
     model.release.set()
-    ended(client, first)
+    ended(client, first, "interrupted")
     interrupted = ended(client, queued, "interrupted")
     assert interrupted["recovery_reason"] == "context_changed" and model.calls == 1
     assert submit(client, second, identity="request-0002").status_code == 409

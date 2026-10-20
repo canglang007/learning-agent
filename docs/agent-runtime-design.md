@@ -1,6 +1,6 @@
 # 可恢复、可交互的问答执行模块设计
 
-状态：RT1已实现并验收，RT2/RT3待实现。更新于：2026-10-20 09:53（Asia/Shanghai，UTC+08:00）。设计审查基线：`0ef29ac`；下文保留完整目标方案，涉及resume、完整循环检查点、原子图像产物和正文流式的内容仍为计划。当前实际能力与结果见[RT1实现说明](agent-runtime.md)。
+状态：RT1/RT2已实现并验收，RT3待实现。更新于：2026-10-20 11:42（Asia/Shanghai，UTC+08:00）。设计审查基线：`0ef29ac`；下文保留完整目标方案，resume、循环检查点和受控图像产物已实现；正文流式仍为计划。当前实际能力与结果见[RT1实现说明](agent-runtime.md)。
 
 ## 1. 目标与设计时的代码缺口
 
@@ -219,7 +219,7 @@ RT1即引入prepared/returned等最小持久边界；未具备完整可恢复工
 
 RT1已新增`runtime.py`、`run_store.py`和`static/runtime.js`，事件接口合并在`app.py`；其余按后续阶段推进。原改动规划：新增`runtime.py`（调度、状态与取消）、`run_store.py`（事务和检查点）、`runtime_events.py`（事件格式/SSE）、受控渲染子进程入口和`static/runtime.js`（订阅和任务卡）；按实际复杂度合并小文件。`agent.py`重构为可继续的执行器；`provider.py/summaries.py/retrieval.py`增加远端操作边界；`store.py/memory.py/learning.py`统一未决会话校验与提交；图片/抽帧路径改原子产物。`jobs.py/worker.py`保持媒体任务职责。
 
-当前不要求迁移LangChain/LangGraph，不引入Redis/Celery，不扩展多租户调度、通用写入工具审批、用户在执行中插话重规划或云端持续运行。这些能力有独立需求时再设计；完整模块按上述RT1—RT3逐步交付，当前交付范围为RT1。
+当前不要求迁移LangChain/LangGraph，不引入Redis/Celery，不扩展多租户调度、通用写入工具审批、用户在执行中插话重规划或云端持续运行。这些能力有独立需求时再设计；完整模块按上述RT1—RT3逐步交付，当前已交付RT1/RT2。
 
 ## 11. 验收设计
 

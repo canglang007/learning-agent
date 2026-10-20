@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from learning_agent.execution_store import ExecutionStore
 from learning_agent.memory import MemoryStore
 from learning_agent.run_store import (
     PENDING_SQL,
@@ -18,7 +19,7 @@ from learning_agent.run_store import (
 )
 
 
-class Store(MemoryStore, RunStore):
+class Store(MemoryStore, ExecutionStore, RunStore):
     def __init__(self, root: Path):
         self.root = root
         (root / "materials").mkdir(parents=True, exist_ok=True)
@@ -106,6 +107,7 @@ class Store(MemoryStore, RunStore):
                 )
         self.init_memory()
         self.init_runtime()
+        self.init_execution()
 
     @contextmanager
     def connect(self):
@@ -192,23 +194,21 @@ class Store(MemoryStore, RunStore):
         return {**dict(row), "name": material["name"]}
 
     def page_image(self, space_id, material_id, page, region=None):
+        from learning_agent.assets import atomic_png, image_target, png_size
         from learning_agent.pdf import render_page
 
         self.page(space_id, material_id, page)
         suffix = "full" if region is None else "-".join(format(v, ".6f") for v in region)
         asset = Path("materials") / material_id / f"page-{page}-{suffix}.png"
-        output = self.root / asset
-        output.parent.mkdir(parents=True, exist_ok=True)
-        if output.exists():
-            from PIL import Image
-
-            with Image.open(output) as image:
-                width, height = image.size
+        output = image_target(self.root, asset)
+        size = png_size(output)
+        if size:
+            width, height = size
         else:
             raw, width, height = render_page(
                 self.root / "materials" / (material_id + ".pdf"), page, region
             )
-            output.write_bytes(raw)
+            atomic_png(output, raw)
         return {
             "asset_path": str(asset),
             "mime_type": "image/png",
@@ -416,19 +416,17 @@ class Store(MemoryStore, RunStore):
         return source
 
     def media_frame(self, space_id, material_id, seconds):
-        from PIL import Image
-
+        from learning_agent.assets import image_target, png_size
         from learning_agent.media import MediaError, frame
 
         info = self.media(space_id, material_id)
         if not info["has_video"] or not 0 <= seconds < info["duration"]:
             raise MediaError("时间点超出视频范围或资料没有画面")
         asset = Path("materials") / material_id / f"frame-{seconds:.3f}.png"
-        output = self.root / asset
-        if not output.exists():
+        output = image_target(self.root, asset)
+        if png_size(output) is None:
             frame(self.root / info["original_path"], output, seconds)
-        with Image.open(output) as image:
-            width, height = image.size
+        width, height = png_size(output)
         return {
             "asset_path": str(asset),
             "mime_type": "image/png",
@@ -523,6 +521,7 @@ class Store(MemoryStore, RunStore):
         state_update=None,
         expected_revision=None,
         owner_token=None,
+        execution_guard=None,
     ):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -547,6 +546,8 @@ class Store(MemoryStore, RunStore):
                     {"role": "assistant", "content": content},
                 ]
             if state in SUCCESS and expected_revision is not None:
+                if execution_guard:
+                    execution_guard(db)
                 current = db.execute(
                     "SELECT revision FROM learning_states WHERE conversation_id=?",
                     (row["conversation_id"],),
@@ -556,6 +557,10 @@ class Store(MemoryStore, RunStore):
             db.execute(
                 "UPDATE runs SET state=?,error=?,owner_token=NULL,phase=?,state_revision=state_revision+1,updated_at=? WHERE id=?",
                 (state, error, state, now(), run_id),
+            )
+            db.execute(
+                "UPDATE run_operations SET state='unknown',updated_at=? WHERE run_id=? AND state='sending'",
+                (now(), run_id),
             )
             db.execute(
                 "INSERT INTO messages(conversation_id,role,content,run_id,kind) VALUES (?,'assistant',?,?,?)",
@@ -886,7 +891,7 @@ class Store(MemoryStore, RunStore):
     def save_context(self, run_id, step, snapshot):
         with self.connect() as db:
             db.execute(
-                "INSERT INTO context_snapshots VALUES (?,?,?,'{}',?)",
+                "INSERT INTO context_snapshots VALUES (?,?,?,'{}',?) ON CONFLICT(run_id,step) DO UPDATE SET snapshot=excluded.snapshot",
                 (run_id, step, json.dumps(snapshot), datetime.now(UTC).isoformat()),
             )
 

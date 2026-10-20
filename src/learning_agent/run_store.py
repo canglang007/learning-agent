@@ -106,7 +106,7 @@ class RunStore:
             raise LookupError("任务没有可用的提交记录")
         return json.loads(row[0])
 
-    def submit_run(self, conversation_id, payload, profile, queue_limit):
+    def submit_run(self, conversation_id, payload, profile, queue_limit, *, execution=None):
         conv = self.get_conversation(conversation_id)
         request_id = payload["client_request_id"]
         identity = {k: payload.get(k) for k in ("content", "focus", "feedback")}
@@ -137,6 +137,7 @@ class RunStore:
             "profile": profile,
             "space_id": conv["space_id"],
             "schema_version": 1,
+            "execution": execution,
         }
         run_id = str(uuid4())
         return self._insert_submission(
@@ -236,57 +237,6 @@ class RunStore:
             self.event_in(db, row[0], "run.started")
         return row[0], owner
 
-    def operation(self, run_id, owner, purpose, step, *, identifier=None, result=None):
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT owner_token,state,cancel_requested FROM runs WHERE id=?", (run_id,)
-            ).fetchone()
-            if (
-                not row
-                or row["owner_token"] != owner
-                or row["state"] != "running"
-                or row["cancel_requested"]
-            ):
-                raise RunStopped()
-            stamp = now()
-            if identifier is None:
-                identifier = str(uuid4())
-                db.execute(
-                    "INSERT INTO run_operations VALUES (?,?,?,?,'prepared',NULL,?,?)",
-                    (identifier, run_id, purpose, step, stamp, stamp),
-                )
-                phase = "prepared"
-            else:
-                phase = "returned" if result is not None else "sending"
-                db.execute(
-                    "UPDATE run_operations SET state=?,result=?,updated_at=? WHERE id=? AND run_id=?",
-                    (
-                        phase,
-                        json.dumps(result, ensure_ascii=False) if result is not None else None,
-                        stamp,
-                        identifier,
-                        run_id,
-                    ),
-                )
-            db.execute(
-                "INSERT INTO run_checkpoints VALUES (?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET phase=excluded.phase,payload=excluded.payload,updated_at=excluded.updated_at",
-                (
-                    run_id,
-                    phase,
-                    json.dumps(
-                        {
-                            "operation_id": identifier,
-                            "purpose": purpose,
-                            "step": step,
-                            "recoverable": False,
-                        }
-                    ),
-                    stamp,
-                ),
-            )
-        return identifier
-
     def interrupt_run(self, run_id, owner, reason="process_interrupted"):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -307,16 +257,41 @@ class RunStore:
             )
             self.event_in(db, run_id, "run.interrupted", {"reason": reason})
 
-    def recover_runs(self):
+    def recover_runs(self, settings=None):
         # Only the exclusive lifespan owner calls this; Store construction never recovers.
         with self.connect() as db:
             rows = db.execute(
-                "SELECT id,owner_token,cancel_requested FROM runs WHERE state IN ('running','cancelling')"
+                "SELECT id,owner_token,cancel_requested FROM runs WHERE state IN ('running','cancelling','interrupted')"
             ).fetchall()
         for row in rows:
-            self.interrupt_run(row["id"], row["owner_token"], "rt1_restart_requires_new_turn")
+            self.interrupt_run(row["id"], row["owner_token"], "process_interrupted")
             if row["cancel_requested"]:
                 self.cancel_run(row["id"])
+            elif self.run(row["id"])["recovery_count"] >= 3:
+                with self.connect() as db:
+                    db.execute(
+                        "UPDATE runs SET recovery_reason='recovery_limit' WHERE id=?", (row["id"],)
+                    )
+            elif settings is not None and self.recovery_options(row["id"]):
+                try:
+                    self.validate_execution(row["id"], settings)
+                except RuntimeConflict:
+                    with self.connect() as db:
+                        db.execute(
+                            "UPDATE runs SET recovery_reason='context_changed' WHERE id=?",
+                            (row["id"],),
+                        )
+                    continue
+                if self.recovery_options(row["id"]) == "resume":
+                    self.resume_run(
+                        row["id"], settings, str(uuid4()), self.run(row["id"])["state_revision"]
+                    )
+                else:
+                    with self.connect() as db:
+                        db.execute(
+                            "UPDATE runs SET recovery_reason='remote_result_unknown' WHERE id=?",
+                            (row["id"],),
+                        )
 
     def cancel_run(self, run_id):
         self.context_turns(self.run(run_id)["conversation_id"])
@@ -417,6 +392,13 @@ class RunStore:
             else [],
             recoverable=False,
         )
+        if row["state"] == "interrupted":
+            action = self.recovery_options(run_id)
+            if action:
+                result["allowed_actions"].append(action)
+                result["recoverable"] = True
+        result["recovery_count"] = row["recovery_count"]
+        result["remaining_seconds"] = row["remaining_seconds"]
         return result
 
     def list_runs(self, conversation_id, active=False, before=None, limit=20):
