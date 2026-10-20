@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from fastapi.testclient import TestClient
+from client_helpers import TestClient
 
 from learning_agent.app import create_app
 from learning_agent.config import Settings

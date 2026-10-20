@@ -8,6 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from learning_agent.learning import LearningConflict
+from learning_agent.run_store import PENDING_SQL
 
 
 class TopicCreate(BaseModel):
@@ -162,7 +163,7 @@ class MemoryStore:
     def _idle(db, conversations):
         for cid in conversations:
             if db.execute(
-                "SELECT 1 FROM runs WHERE conversation_id=? AND state='running'", (cid,)
+                f"SELECT 1 FROM runs WHERE conversation_id=? AND state IN {PENDING_SQL}", (cid,)
             ).fetchone():
                 raise LearningConflict("相关会话正在回答，请完成后再修改主题或记忆")
 
@@ -353,6 +354,19 @@ class MemoryStore:
                 }
                 memory["status"] = "deleted"
                 db.execute("DELETE FROM memory_versions WHERE memory_id=?", (memory_id,))
+                for frozen in db.execute(
+                    "SELECT i.run_id,i.payload FROM run_inputs i JOIN runs r ON r.id=i.run_id "
+                    "JOIN conversations c ON c.id=r.conversation_id WHERE c.space_id=? AND i.payload LIKE ?",
+                    (space_id, "%" + memory_id + "%"),
+                ).fetchall():
+                    payload = json.loads(frozen["payload"])
+                    bundle = payload.get("memories", {})
+                    bundle["items"] = [m for m in bundle.get("items", []) if m["id"] != memory_id]
+                    bundle.setdefault("redacted_memory_ids", []).append(memory_id)
+                    db.execute(
+                        "UPDATE run_inputs SET payload=? WHERE run_id=?",
+                        (json.dumps(payload), frozen["run_id"]),
+                    )
                 for turn in db.execute(
                     "SELECT p.conversation_id,p.turn_seq,p.raw_input FROM protocol_turns p "
                     "JOIN conversations c ON c.id=p.conversation_id WHERE c.space_id=? "

@@ -16,7 +16,8 @@ const post=(path,content)=>api(path,{method:'POST',headers:{'Content-Type':'appl
 function notice(text,error=false) {$('notice').textContent=text;$('notice').className=error?'error':'';}
 function guarded(fn) {return async e=>{try{await fn(e);}catch(error){notice(error.message,true);}};}
 function availability() {
-  for(const id of ['send','spaces','conversations','new-conversation']) $(id).disabled=busy;
+  $('send').disabled=busy;
+  $('spaces').disabled=uploading;
   document.querySelectorAll('#space-form input,#space-form button,#upload-form input,#upload-form button').forEach(el=>el.disabled=busy);
   if(uploading){$('spaces').disabled=true;document.querySelectorAll('#space-form input,#space-form button,#upload-form input,#upload-form button').forEach(el=>el.disabled=true);}
   $('send').disabled=busy||!conversation||!configured;
@@ -80,9 +81,9 @@ async function loadChat() {
   $('chat').replaceChildren();
   if(!messages.length)$('chat').innerHTML='<p>创建会话后提出困惑。你可以直接追问，不必按固定学习流程操作。</p>';
   for(const m of messages) {
-    const article=document.createElement('article');article.innerHTML=`<small>${m.role==='user'?'你的问题':'讲解'}</small><div class="body"></div>`;
+    const article=document.createElement('article');article.innerHTML=`<small>${m.role==='user'?'你的问题':m.kind==='system'?'系统状态':'讲解'}</small><div class="body"></div>`;
     const body=article.querySelector('.body');if(m.role==='assistant'&&m.run_id)article.id='answer-'+m.run_id;
-    if(m.role==='assistant')markdown(body,m.content);else{body.classList.add('user');body.textContent=m.content;}
+    if(m.role==='assistant'&&m.kind!=='system')markdown(body,m.content);else{body.classList.add('user');body.textContent=m.content;}
     if(m.role==='assistant'&&m.run_id) {
       const sources=document.createElement('div');sources.className='sources';article.append(sources);
       const details=document.createElement('details');details.innerHTML='<summary>查看本轮工具与执行状态</summary><pre>加载中…</pre>';article.append(details);
@@ -109,7 +110,7 @@ async function loadChat() {
     }
     $('chat').append(article);
   }
-  await loadLearning();await loadMemory();availability();
+  await loadLearning();await loadMemory();await bindRuntime();availability();
 }
 async function showPage(id,page) {
   const base=`/spaces/${space}/materials/${id}`, data=await api(`${base}/pages/${page}`), pages=await api(`${base}/pages`);
@@ -221,11 +222,7 @@ $('resume-upload').onclick=guarded(async()=>{
 });
 $('cancel-upload').onclick=guarded(async()=>{const pending=pendingUpload();if(!pending||uploading)return;await api(`/uploads/${pending.id}`,{method:'DELETE'});localStorage.removeItem(uploadKey());refreshUploadRecovery();$('upload-progress').textContent='临时上传已取消';});
 $('new-conversation').onclick=guarded(async()=>{clearFeedback();if(!space)throw Error('请先创建资料空间');const c=await api(`/spaces/${space}/conversations`,{method:'POST'});await loadSpace();conversation=c.id;$('conversations').value=c.id;await loadChat();});
-$('ask-form').onsubmit=async e=>{
-  e.preventDefault();if(busy||!conversation)return;busy=true;availability();notice('正在理解问题并按需查阅资料…');
-  try{const r=await api(`/conversations/${conversation}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:$('question').value,focus,feedback:feedbackDraft?{...feedbackDraft,focus_text:$('feedback-focus').value}:null})});$('question').value='';clearFeedback();await loadChat();notice(r.state==='completed'?'本轮讲解已完成，可以继续追问。':r.answer,r.state==='failed');}
-  catch(error){notice(error.message,true);await loadChat();}finally{busy=false;availability();}
-};
+$('ask-form').onsubmit=async e=>{e.preventDefault();await submitRuntimeQuestion();};
 $('materials').onclick=guarded(async e=>{
   if(e.target.dataset.outline)return showOutline(e.target.dataset.outline);
   const id=e.target.dataset.material;if(!id)return;const m=await api(`/spaces/${space}/materials/${id}`);

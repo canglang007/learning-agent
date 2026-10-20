@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import time
+from functools import partial
 
 from pydantic import ValidationError
 
@@ -15,6 +16,7 @@ from learning_agent.learning import (
 )
 from learning_agent.provider import ModelError, OpenAIProvider, asset_info
 from learning_agent.retrieval import Retriever
+from learning_agent.run_store import SUCCESS, RunStopped
 from learning_agent.summaries import maybe_summarize
 from learning_agent.tools import MaterialTools, RecallArgs, definitions
 
@@ -44,15 +46,33 @@ PDF引用用[资料名:p页码]，文字用行号。不能把页内文字推断�
 
 
 async def run_turn(
-    store, provider, settings, conversation_id, question, focus=None, retriever=None, feedback=None
+    store,
+    provider,
+    settings,
+    conversation_id,
+    question,
+    focus=None,
+    retriever=None,
+    feedback=None,
+    *,
+    run_id=None,
+    control=None,
 ):
     conversation = store.get_conversation(conversation_id)
     feedback = Feedback.model_validate(feedback).model_dump() if feedback else None
-    store.refresh_memory_versions(conversation_id)
-    run_id = store.start_run(conversation_id, question, feedback)
-    memories = store.recall_memories(conversation_id, question, focus)
-    context_setting = store.context_settings(conversation_id)
-    learning = store.learning_state(conversation_id)
+    if control:
+        frozen = store.run_input(run_id)
+        memories, context_setting, learning = (
+            frozen["memories"],
+            frozen["context_settings"],
+            frozen["learning"],
+        )
+    else:
+        store.refresh_memory_versions(conversation_id)
+        run_id = store.start_run(conversation_id, question, feedback)
+        memories = store.recall_memories(conversation_id, question, focus)
+        context_setting = store.context_settings(conversation_id)
+        learning = store.learning_state(conversation_id)
     base_state, pending_state = learning["state"], None
     learning = {
         "state": state_for_context(base_state),
@@ -69,7 +89,13 @@ async def run_turn(
         question,
         learning,
         feedback,
-        store.feedback_target(conversation_id, feedback["target_run_id"]) if feedback else None,
+        (
+            frozen["target"]
+            if control
+            else store.feedback_target(conversation_id, feedback["target_run_id"])
+        )
+        if feedback
+        else None,
         focus,
         memories,
     )
@@ -92,11 +118,14 @@ async def run_turn(
     learning_notes = []
     started = time.monotonic()
     error = None
+    run_tool = control.tool if control else asyncio.to_thread
     state = "completed"
     context_step, snapshot_saved = 0, False
     try:
         async with asyncio.timeout(settings.timeout_seconds * 2):
             for index in range(settings.max_steps):
+                if control:
+                    control.check()
                 context_step, snapshot_saved = index + 1, False
                 allow = index < settings.max_steps - 1 and calls_used < 12
                 instructions = (
@@ -121,6 +150,7 @@ async def run_turn(
                         manager.profile,
                         prepared,
                         summary,
+                        control=control,
                     )
                     if summary_event:
                         summary_attempted = True
@@ -146,6 +176,11 @@ async def run_turn(
                 }
                 store.save_context(run_id, context_step, prepared.snapshot)
                 snapshot_saved = True
+                if control and prepared.snapshot.get("omissions"):
+                    control.emit(
+                        "context.reduced",
+                        {"step": context_step, "count": len(prepared.snapshot["omissions"])},
+                    )
                 if isinstance(provider, OpenAIProvider):
                     request = provider.build_request(
                         prepared.messages, instructions, tool_definitions, allow
@@ -159,11 +194,28 @@ async def run_turn(
                         raise ContextError(
                             "context_required_too_large", "最终请求超过本机上下文预算，未发送。"
                         )
-                    message, usage = await provider.send(request)
+                    if control:
+                        message, usage = await control.model(
+                            partial(provider.send, request), step=context_step
+                        )
+                    else:
+                        message, usage = await provider.send(request)
                 else:
-                    message, usage = await provider.step(
-                        prepared.messages, instructions, tool_definitions, allow
-                    )
+                    if control:
+                        message, usage = await control.model(
+                            partial(
+                                provider.step,
+                                prepared.messages,
+                                instructions,
+                                tool_definitions,
+                                allow,
+                            ),
+                            step=context_step,
+                        )
+                    else:
+                        message, usage = await provider.step(
+                            prepared.messages, instructions, tool_definitions, allow
+                        )
                 store.context_result(run_id, context_step, {"state": "returned", "usage": usage})
                 group = ProtocolGroup(
                     f"{run_id}:step:{context_step}",
@@ -192,6 +244,15 @@ async def run_turn(
                 images, delivery = [], None
                 for call in calls:
                     name = call["function"]["name"]
+                    if control:
+                        control.emit(
+                            "tool.started",
+                            {
+                                "name": name
+                                if name in {d["name"] for d in tool_definitions}
+                                else "unknown"
+                            },
+                        )
                     try:
                         args = json.loads(call["function"]["arguments"])
                         fingerprint = (name, json.dumps(args, sort_keys=True))
@@ -239,7 +300,7 @@ async def run_turn(
                                 observation = (
                                     copy.deepcopy(cached["observation"])
                                     if valid
-                                    else await asyncio.to_thread(
+                                    else await run_tool(
                                         tools.execute,
                                         name,
                                         args,
@@ -377,7 +438,7 @@ async def run_turn(
                             if not observation.get("error"):
                                 seen.add(fingerprint)
                         else:
-                            observation = await asyncio.to_thread(
+                            observation = await run_tool(
                                 tools.execute,
                                 name,
                                 args,
@@ -442,6 +503,21 @@ async def run_turn(
                         }
                     )
                     store.save_events(run_id, events)
+                    if control:
+                        control.emit(
+                            "tool.finished",
+                            {
+                                "name": name
+                                if name in {d["name"] for d in tool_definitions}
+                                else "unknown",
+                                "error": bool(observation.get("error")),
+                                **{
+                                    k: observation[k]
+                                    for k in ("material_id", "page", "start_seconds", "end_seconds")
+                                    if k in observation
+                                },
+                            },
+                        )
                 if delivery is not None:
                     content = delivery
                     break
@@ -457,6 +533,17 @@ async def run_turn(
                         )
             else:
                 raise ModelError("达到执行上限，未取得最终回答。")
+    except RunStopped as exception:
+        store.save_events(run_id, events)
+        if exception.interrupted:
+            store.interrupt_run(run_id, control.owner, "rt1_shutdown_requires_new_turn")
+            return {
+                "run_id": run_id,
+                "state": "interrupted",
+                "answer": "本轮已中断，请结束此轮后重新提问。",
+                "context_limited": False,
+            }
+        state, content, error = "cancelled", "本轮已停止，未提交讲解；可以重新提问。", None
     except (ModelError, TimeoutError) as exception:
         state, error = "failed", (str(exception) or "本轮执行超时，请稍后重试。")
         content = error
@@ -479,10 +566,16 @@ async def run_turn(
         ]
     archived_groups = copy.deepcopy([g.dump() for g in groups])
     archived_groups[0]["messages"] = [{"role": "user", "content": question}]
-    if state != "failed":
+    if state in SUCCESS:
         history = [*conversation["protocol"], *(m for g in archived_groups for m in g["messages"])]
+    else:
+        history = [
+            *conversation["protocol"],
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": "[系统状态：本轮未交付讲解。" + content + "]"},
+        ]
     store.save_events(run_id, events)
-    store.finish_run(
+    outcome = store.finish_run(
         run_id,
         state,
         content,
@@ -491,6 +584,7 @@ async def run_turn(
         learning_notes,
         state_update=pending_state,
         expected_revision=base_state["revision"],
+        owner_token=control.owner if control else None,
         archive={
             "profile": manager.profile,
             "input": {
@@ -504,7 +598,7 @@ async def run_turn(
     )
     return {
         "run_id": run_id,
-        "state": state,
-        "answer": content,
+        "state": outcome["state"],
+        "answer": outcome["answer"],
         "context_limited": any(s.get("omissions") for s in store.run_context(run_id)),
     }

@@ -6,7 +6,7 @@ import sqlite3
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from client_helpers import TestClient, close_for
 from PIL import Image, ImageDraw
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -38,6 +38,7 @@ def pdf_bytes():
 def prepared(tmp_path, model=None, **settings):
     config = Settings(_env_file=None, data_root=tmp_path, **settings)
     model = model or Scripted([])
+    close_for(tmp_path)
     client = TestClient(create_app(config, model))
     space = client.post("/api/spaces", json={"content": "pdf study"}).json()["id"]
     uploaded = client.post(

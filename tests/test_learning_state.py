@@ -2,7 +2,7 @@ import asyncio
 import json
 
 import pytest
-from fastapi.testclient import TestClient
+from client_helpers import TestClient, close_for
 from test_feedback import deliver
 from test_learning import call, setup
 
@@ -53,6 +53,7 @@ def test_state_corrections_revision_conflict_and_reset_survive_restart(tmp_path)
         base + "/learning", json={"revision": current["revision"], "reset": True}
     ).json()
     assert reset["state"]["goal"] is None and reset["state"]["open_questions"] == []
+    close_for(tmp_path)
     reopened = TestClient(create_app(Settings(_env_file=None, data_root=tmp_path), model))
     assert reopened.get(base + "/learning").json()["state"] == reset["state"]
     assert len(reopened.get(base + "/messages").json()) == 4
@@ -313,6 +314,7 @@ def test_summary_failure_falls_back_to_regular_answer_without_same_range_retry(t
             "summary_timeout_seconds": 0.001,
         },
     )
+    close_for(tmp_path)
     client = TestClient(create_app(settings, model))
     for _ in range(2):
         result = client.post(

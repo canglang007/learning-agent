@@ -10,6 +10,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from learning_agent.provider import ModelError, OpenAIProvider
+from learning_agent.run_store import RunStopped
 
 
 class SummaryItem(BaseModel):
@@ -67,7 +68,17 @@ def summary_message(summary):
 
 
 async def maybe_summarize(
-    store, provider, settings, conversation_id, turns, state, profile, prepared, previous
+    store,
+    provider,
+    settings,
+    conversation_id,
+    turns,
+    state,
+    profile,
+    prepared,
+    previous,
+    *,
+    control=None,
 ):
     if not settings.enable_context_summary:
         return previous, None
@@ -187,7 +198,14 @@ async def maybe_summarize(
         )
         async with asyncio.timeout(settings.summary_timeout_seconds):
             event["request_sent"] = True
-            message, usage = await summarizer.step(history, SUMMARY_INSTRUCTIONS, tools, True)
+            if control:
+                message, usage = await control.model(
+                    lambda: summarizer.step(history, SUMMARY_INSTRUCTIONS, tools, True),
+                    step=prepared.snapshot.get("step", 0),
+                    purpose="summary",
+                )
+            else:
+                message, usage = await summarizer.step(history, SUMMARY_INSTRUCTIONS, tools, True)
         event["response_returned"] = True
         event["usage"] = usage
         calls = message.get("tool_calls", [])
@@ -228,9 +246,20 @@ async def maybe_summarize(
     except (ModelError, TimeoutError, ValidationError, ValueError, TypeError, KeyError):
         record["status"], event["state"] = "failed", "failed"
     finally:
+        if control:
+            try:
+                control.check()
+            except RunStopped:
+                record["status"] = "interrupted"
         if record["status"] == "running":
             record["status"] = "interrupted"
         event["elapsed_s"] = round(time.monotonic() - started, 3)
         record["result"] = {**record["result"], "usage": usage, "elapsed_s": event["elapsed_s"]}
-        store.save_summary(record)
+        store.save_summary(
+            record,
+            run_id=control.run_id if control else None,
+            owner_token=control.owner if control else None,
+        )
+    if control:
+        control.emit("summary.finished", {"state": record["status"]})
     return (record if record["status"] == "ready" else previous), event

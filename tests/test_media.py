@@ -1,7 +1,7 @@
 import shutil
 
 import pytest
-from fastapi.testclient import TestClient
+from client_helpers import TestClient, close_for
 from PIL import Image
 from test_learning import Scripted, call
 
@@ -46,6 +46,7 @@ def clip(tmp_path):
 def prepared(tmp_path, clip, model=None, **kwargs):
     config = Settings(_env_file=None, data_root=tmp_path / "db", **kwargs)
     model = model or Scripted([])
+    close_for(tmp_path)
     client = TestClient(create_app(config, model))
     space = client.post("/api/spaces", json={"content": "media"}).json()["id"]
     upload = client.post(f"/api/spaces/{space}/materials", files={"file": ("colors.mp4", clip)})
@@ -271,6 +272,7 @@ def test_local_asr_accepts_decoded_waveform_and_failure_preserves_captions(tmp_p
     result = media.transcribe(source, 1.0, config)
     assert result["segments"] == [{"start": 0.0, "end": 1.0, "text": "speech"}]
     assert result["alignment_notes"][0]["reported_end"] == 1.4
+    close_for(tmp_path)
     client = TestClient(create_app(config, Scripted([])))
     space = client.post("/api/spaces", json={"content": "audio"}).json()["id"]
     material = client.post(

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     data_root: Path = Path("data")
     timeout_seconds: float = Field(default=90, gt=0)
     max_steps: int = Field(default=8, ge=1, le=20)
+    runtime_queue_limit: int = Field(default=20, ge=1, le=100)
     enable_vision: bool = True
     max_images_per_turn: int = Field(default=3, ge=1, le=6)
     context_budget_tokens: int = Field(default=65536, ge=1024)

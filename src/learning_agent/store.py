@@ -7,9 +7,18 @@ from pathlib import Path
 from uuid import uuid4
 
 from learning_agent.memory import MemoryStore
+from learning_agent.run_store import (
+    PENDING_SQL,
+    SUCCESS,
+    TERMINAL,
+    RunStopped,
+    RunStore,
+    RuntimeConflict,
+    now,
+)
 
 
-class Store(MemoryStore):
+class Store(MemoryStore, RunStore):
     def __init__(self, root: Path):
         self.root = root
         (root / "materials").mkdir(parents=True, exist_ok=True)
@@ -96,6 +105,7 @@ class Store(MemoryStore):
                     "ALTER TABLE media ADD COLUMN transcript_revision INTEGER NOT NULL DEFAULT 0"
                 )
         self.init_memory()
+        self.init_runtime()
 
     @contextmanager
     def connect(self):
@@ -512,13 +522,49 @@ class Store(MemoryStore):
         archive=None,
         state_update=None,
         expected_revision=None,
+        owner_token=None,
     ):
         with self.connect() as db:
-            row = db.execute("SELECT conversation_id FROM runs WHERE id=?", (run_id,)).fetchone()
-            db.execute("UPDATE runs SET state=?,error=? WHERE id=?", (state, error, run_id))
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+            if row["state"] in TERMINAL:
+                old = db.execute(
+                    "SELECT content FROM messages WHERE run_id=? AND role='assistant'", (run_id,)
+                ).fetchone()
+                return {"state": row["state"], "answer": old[0] if old else ""}
+            if owner_token is not None and row["owner_token"] != owner_token:
+                raise RunStopped(interrupted=True)
+            if row["cancel_requested"]:
+                state, content, error = "cancelled", "本轮已停止，未提交讲解；可以重新提问。", None
+                prior = db.execute(
+                    "SELECT protocol FROM conversations WHERE id=?", (row["conversation_id"],)
+                ).fetchone()
+                question = db.execute(
+                    "SELECT content FROM messages WHERE run_id=? AND role='user'", (run_id,)
+                ).fetchone()
+                protocol = json.loads(prior[0]) + [
+                    {"role": "user", "content": question[0]},
+                    {"role": "assistant", "content": content},
+                ]
+            if state in SUCCESS and expected_revision is not None:
+                current = db.execute(
+                    "SELECT revision FROM learning_states WHERE conversation_id=?",
+                    (row["conversation_id"],),
+                ).fetchone()
+                if not current or current[0] != expected_revision:
+                    raise RuntimeConflict("学习状态已改变，未提交本轮答案")
             db.execute(
-                "INSERT INTO messages(conversation_id,role,content,run_id) VALUES (?,'assistant',?,?)",
-                (row["conversation_id"], content, run_id),
+                "UPDATE runs SET state=?,error=?,owner_token=NULL,phase=?,state_revision=state_revision+1,updated_at=? WHERE id=?",
+                (state, error, state, now(), run_id),
+            )
+            db.execute(
+                "INSERT INTO messages(conversation_id,role,content,run_id,kind) VALUES (?,'assistant',?,?,?)",
+                (
+                    row["conversation_id"],
+                    content,
+                    run_id,
+                    "answer" if state in SUCCESS else "system",
+                ),
             )
             db.execute(
                 "UPDATE conversations SET protocol=? WHERE id=?",
@@ -538,7 +584,7 @@ class Store(MemoryStore):
                         json.dumps(archive["profile"]),
                         json.dumps({**archive["input"], "answer": content}),
                         json.dumps(archive["groups"]),
-                        "failed" if state == "failed" else "ready",
+                        "ready" if state in SUCCESS else "failed",
                         datetime.now(UTC).isoformat(),
                     ),
                 )
@@ -551,7 +597,7 @@ class Store(MemoryStore):
                     ],
                 )
                 if state_update is not None:
-                    db.execute(
+                    changed = db.execute(
                         "UPDATE learning_states SET revision=?,state_json=?,updated_at=? "
                         "WHERE conversation_id=? AND revision=?",
                         (
@@ -561,7 +607,16 @@ class Store(MemoryStore):
                             row["conversation_id"],
                             expected_revision,
                         ),
-                    )
+                    ).rowcount
+                    if changed != 1:
+                        raise RuntimeConflict("学习状态已改变，未提交本轮答案")
+            self.event_in(
+                db,
+                run_id,
+                "run.completed" if state in SUCCESS else "run." + state,
+                {"state": state},
+            )
+        return {"state": state, "answer": content}
 
     def learning_state(self, conversation_id):
         self.get_conversation(conversation_id)
@@ -655,7 +710,8 @@ class Store(MemoryStore):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute(
-                "SELECT 1 FROM runs WHERE conversation_id=? AND state='running'", (conversation_id,)
+                f"SELECT 1 FROM runs WHERE conversation_id=? AND state IN {PENDING_SQL}",
+                (conversation_id,),
             ).fetchone():
                 raise LearningConflict("正在回答，请完成后再修改学习状态")
             row = db.execute(
@@ -718,7 +774,7 @@ class Store(MemoryStore):
                     source_conversation = source[0]
             row = db.execute(
                 "SELECT m.content,r.state FROM messages m JOIN runs r ON r.id=m.run_id "
-                "WHERE m.conversation_id=? AND m.run_id=? AND m.role=? AND r.state!='running'",
+                f"WHERE m.conversation_id=? AND m.run_id=? AND m.role=? AND r.state NOT IN {PENDING_SQL}",
                 (source_conversation, run_id, role),
             ).fetchone()
         if row is None:
@@ -774,7 +830,7 @@ class Store(MemoryStore):
                     for m in db.execute(
                         "SELECT m.role,m.content FROM messages m LEFT JOIN runs r ON r.id=m.run_id "
                         "WHERE m.conversation_id=? AND m.role IN ('user','assistant') "
-                        "AND (m.run_id IS NULL OR r.state!='running') ORDER BY m.seq",
+                        f"AND (m.run_id IS NULL OR r.state NOT IN {PENDING_SQL}) ORDER BY m.seq",
                         (conversation_id,),
                     )
                 ]
@@ -834,8 +890,18 @@ class Store(MemoryStore):
                 (run_id, step, json.dumps(snapshot), datetime.now(UTC).isoformat()),
             )
 
-    def save_summary(self, record):
+    def save_summary(self, record, *, run_id=None, owner_token=None):
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if run_id is not None:
+                run = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+                if (
+                    not run
+                    or run["owner_token"] != owner_token
+                    or run["state"] != "running"
+                    or run["cancel_requested"]
+                ):
+                    record["status"] = "interrupted"
             db.execute(
                 "INSERT INTO context_summaries VALUES (?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET status=excluded.status,payload=excluded.payload,result=excluded.result",

@@ -1,13 +1,15 @@
 import asyncio
+import json
 import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
-from learning_agent.agent import run_turn
 from learning_agent.config import Settings
 from learning_agent.context import profile_id
 from learning_agent.jobs import JobConflict, Jobs
@@ -18,6 +20,8 @@ from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
 from learning_agent.references import resolve_references
 from learning_agent.retrieval import Retriever
+from learning_agent.run_store import TERMINAL, RuntimeUnavailable
+from learning_agent.runtime import RuntimeService
 from learning_agent.store import Store
 from learning_agent.uploads import Uploads
 
@@ -58,6 +62,10 @@ class Question(Text):
     feedback: Feedback | None = None
 
 
+class RunQuestion(Question):
+    client_request_id: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
 class Source(BaseModel):
     url: HttpUrl | None = Field(default=None, max_length=2048)
     start_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
@@ -76,9 +84,20 @@ def create_app(settings=None, provider=None):
     jobs = Jobs(store)
     uploads = Uploads(store, jobs, settings)
     model = provider or OpenAIProvider(settings)
-    app = FastAPI(title="Learning Agent · 多模态学习讲解")
+    runtime = RuntimeService(store, model, settings, retriever)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        await runtime.start()
+        try:
+            yield
+        finally:
+            await runtime.close()
+
+    app = FastAPI(title="Learning Agent · 多模态学习讲解", lifespan=lifespan)
     app.state.store = store
     app.state.jobs = jobs
+    app.state.runtime = runtime
     app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 
     @app.exception_handler(MediaError)
@@ -117,6 +136,9 @@ def create_app(settings=None, provider=None):
             "embedding_provider": settings.embedding_provider,
             "verification": "inspect_actual_run_results",
             "worker_online": jobs.online(),
+            "runtime_online": runtime.task is not None
+            and not runtime.task.done()
+            and not runtime.stopping,
             "media_max_bytes": settings.media_max_bytes,
             "media_max_seconds": settings.media_max_seconds,
         }
@@ -300,10 +322,20 @@ def create_app(settings=None, provider=None):
     async def messages(conversation_id: str):
         return store.messages(conversation_id)
 
-    @app.post("/api/conversations/{conversation_id}/messages")
-    async def ask(conversation_id: str, payload: Question):
+    def submit_question(conversation_id, payload, request_id):
         conv = store.get_conversation(conversation_id)
         focus = payload.focus.model_dump(exclude_none=True) if payload.focus else None
+        prior = store.existing_submission(
+            conversation_id,
+            request_id,
+            {
+                "content": payload.content,
+                "focus": focus,
+                "feedback": payload.feedback.model_dump() if payload.feedback else None,
+            },
+        )
+        if prior:
+            return prior
         if focus:
             if "page" in focus:
                 store.page(conv["space_id"], focus["material_id"], focus["page"])
@@ -314,20 +346,101 @@ def create_app(settings=None, provider=None):
         if provider is None and not settings.api_key.get_secret_value():
             raise HTTPException(503, "请在本机 .env 中配置 LA_API_KEY；当前不会调用模型。")
         try:
-            return await run_turn(
-                store,
-                model,
-                settings,
+            return runtime.submit(
                 conversation_id,
-                payload.content,
-                focus,
-                retriever,
-                payload.feedback.model_dump() if payload.feedback else None,
+                {
+                    "content": payload.content,
+                    "focus": focus,
+                    "feedback": payload.feedback.model_dump() if payload.feedback else None,
+                    "client_request_id": request_id,
+                },
             )
         except FeedbackError as error:
             raise HTTPException(422, str(error)) from None
         except sqlite3.IntegrityError:
             raise HTTPException(409, "该会话正在回答，请等待完成后再发送。") from None
+
+    @app.exception_handler(RuntimeUnavailable)
+    async def runtime_unavailable(_request, error):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=503, content={"detail": str(error)})
+
+    @app.post("/api/conversations/{conversation_id}/messages")
+    async def ask(
+        conversation_id: str,
+        payload: Question,
+        idempotency_key: str | None = Header(
+            default=None, min_length=8, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$"
+        ),
+    ):
+        run_id = submit_question(conversation_id, payload, idempotency_key or str(uuid4()))
+        return await runtime.wait_result(run_id)
+
+    @app.post("/api/conversations/{conversation_id}/runs", status_code=202)
+    async def submit(conversation_id: str, payload: RunQuestion):
+        run_id = submit_question(conversation_id, payload, payload.client_request_id)
+        return {
+            "run_id": run_id,
+            "state": store.public_run(run_id)["state"],
+            "url": f"/api/runs/{run_id}",
+            "events_url": f"/api/runs/{run_id}/events",
+        }
+
+    @app.get("/api/conversations/{conversation_id}/runs")
+    async def conversation_runs(
+        conversation_id: str,
+        status: str = Query(default="all", pattern="^(active|all)$"),
+        before: int | None = Query(default=None, ge=1),
+        limit: int = Query(default=20, ge=1, le=50),
+    ):
+        return store.list_runs(conversation_id, status == "active", before, limit)
+
+    @app.post("/api/runs/{run_id}/cancel")
+    async def cancel_run(run_id: str):
+        store.cancel_run(run_id)
+        runtime.wake.set()
+        return store.public_run(run_id)
+
+    @app.get("/api/runs/{run_id}/events")
+    async def run_events(
+        run_id: str,
+        request: Request,
+        after: int = Query(default=0, ge=0),
+        last_event_id: str | None = Header(default=None),
+    ):
+        try:
+            cursor = int(last_event_id) if last_event_id is not None else after
+            events = store.progress_events(run_id, cursor)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        if "text/event-stream" not in request.headers.get("accept", ""):
+            return events
+
+        async def stream():
+            nonlocal cursor
+            heartbeat = 0
+            while not await request.is_disconnected():
+                batch = store.progress_events(run_id, cursor)
+                for event in batch:
+                    cursor = event["seq"]
+                    yield f"id: {cursor}\nevent: progress\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                current = store.public_run(run_id)
+                if (
+                    current["state"] in TERMINAL or current["state"] == "interrupted"
+                ) and cursor >= current["last_event_seq"]:
+                    return
+                heartbeat += 1
+                if heartbeat >= 40:
+                    yield ": heartbeat\n\n"
+                    heartbeat = 0
+                await asyncio.sleep(0.25)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/conversations/{conversation_id}/learning")
     async def learning_state(conversation_id: str):
@@ -403,7 +516,7 @@ def create_app(settings=None, provider=None):
 
     @app.get("/api/runs/{run_id}")
     async def run(run_id: str):
-        result = store.run(run_id)
+        result = store.public_run(run_id)
         answer, events = store.reference_context(run_id)
         space_id = store.get_conversation(result["conversation_id"])["space_id"]
         return {

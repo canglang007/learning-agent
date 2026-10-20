@@ -1,8 +1,8 @@
 # 可恢复、可交互的问答执行模块设计
 
-状态：设计完成，尚未实现。编写/更新于：2026-10-20 09:32（Asia/Shanghai，UTC+08:00）。代码审查基线：`0ef29ac`。本文的接口、数据表、默认值与验收任务均为拟定方案；当前可用行为以代码与README为准。
+状态：RT1已实现并验收，RT2/RT3待实现。更新于：2026-10-20 09:53（Asia/Shanghai，UTC+08:00）。设计审查基线：`0ef29ac`；下文保留完整目标方案，涉及resume、完整循环检查点、原子图像产物和正文流式的内容仍为计划。当前实际能力与结果见[RT1实现说明](agent-runtime.md)。
 
-## 1. 目标与实际缺口
+## 1. 目标与设计时的代码缺口
 
 用户提交问题后能查看实际进度、刷新后继续查看、停止当前回答，并在服务重启后恢复有条件恢复的任务。运行恢复仍服务于准确讲解，不改变Agent根据观察自主选择工具的方式。
 
@@ -217,9 +217,9 @@ schema变更、迁移和索引调整仅在本项目数据库中进行；原资�
 
 RT1即引入prepared/returned等最小持久边界；未具备完整可恢复工作状态时重启标interrupted，不提前宣传自动续跑。RT2补齐恢复；RT3完成本模块验收。上述RT编号与先前M1/M2/M3上下文阶段区分。
 
-拟新增`runtime.py`（调度、状态与取消）、`run_store.py`（事务和检查点）、`runtime_events.py`（事件格式/SSE）、受控渲染子进程入口和`static/runtime.js`（订阅和任务卡）；按实际复杂度合并小文件。`agent.py`重构为可继续的执行器；`provider.py/summaries.py/retrieval.py`增加远端操作边界；`store.py/memory.py/learning.py`统一未决会话校验与提交；图片/抽帧路径改原子产物。`jobs.py/worker.py`保持媒体任务职责。
+RT1已新增`runtime.py`、`run_store.py`和`static/runtime.js`，事件接口合并在`app.py`；其余按后续阶段推进。原改动规划：新增`runtime.py`（调度、状态与取消）、`run_store.py`（事务和检查点）、`runtime_events.py`（事件格式/SSE）、受控渲染子进程入口和`static/runtime.js`（订阅和任务卡）；按实际复杂度合并小文件。`agent.py`重构为可继续的执行器；`provider.py/summaries.py/retrieval.py`增加远端操作边界；`store.py/memory.py/learning.py`统一未决会话校验与提交；图片/抽帧路径改原子产物。`jobs.py/worker.py`保持媒体任务职责。
 
-当前不要求迁移LangChain/LangGraph，不引入Redis/Celery，不扩展多租户调度、通用写入工具审批、用户在执行中插话重规划或云端持续运行。这些能力有独立需求时再设计；本轮完整交付上述RT1—RT3。
+当前不要求迁移LangChain/LangGraph，不引入Redis/Celery，不扩展多租户调度、通用写入工具审批、用户在执行中插话重规划或云端持续运行。这些能力有独立需求时再设计；完整模块按上述RT1—RT3逐步交付，当前交付范围为RT1。
 
 ## 11. 验收设计
 

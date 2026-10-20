@@ -2,7 +2,7 @@ import asyncio
 import json
 
 import httpx
-from fastapi.testclient import TestClient
+from client_helpers import TestClient, close_for
 from test_feedback import deliver
 from test_learning import call, setup
 
@@ -90,6 +90,7 @@ def test_opt_in_same_name_topics_and_spaces_are_isolated_and_persist(tmp_path):
         ).status_code
         == 404
     )
+    close_for(tmp_path)
     reopened = TestClient(create_app(Settings(_env_file=None, data_root=tmp_path), model))
     assert (
         reopened.get(f"/api/conversations/{conv['id']}/context-settings").json()["topic_id"]
@@ -301,9 +302,12 @@ def test_running_turn_blocks_memory_mutations_across_linked_conversations(tmp_pa
                 "source_run_id": None,
             },
         )
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client,
+        ):
             task = asyncio.create_task(
                 client.post(f"/api/conversations/{conv['id']}/messages", json={"content": "继续"})
             )

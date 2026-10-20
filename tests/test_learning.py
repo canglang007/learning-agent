@@ -4,7 +4,7 @@ import json
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from client_helpers import TestClient, close_for
 from pydantic import SecretStr
 
 from learning_agent.app import create_app
@@ -41,6 +41,7 @@ class Scripted:
 def setup(tmp_path, responses):
     model = Scripted(responses)
     settings = Settings(_env_file=None, data_root=tmp_path)
+    close_for(tmp_path)
     client = TestClient(create_app(settings, model))
     space = client.post("/api/spaces", json={"content": "学习"}).json()
     material = client.post(
@@ -73,6 +74,7 @@ def test_direct_explanation_and_followup_persist_without_forced_retrieval(tmp_pa
     assert not any(
         e["type"] == "tool" for e in client.get(f"/api/runs/{first['run_id']}").json()["events"]
     )
+    close_for(tmp_path)
     reopened = TestClient(create_app(Settings(_env_file=None, data_root=tmp_path), model))
     assert len(reopened.get(url).json()) == 4
     assert len(reopened.get(f"/api/spaces/{space['id']}/materials").json()) == 1
@@ -138,12 +140,14 @@ def test_tools_cannot_read_another_space_and_run_recovers(tmp_path):
 
 def test_missing_key_and_provider_failure_are_explicit(tmp_path):
     settings = Settings(_env_file=None, data_root=tmp_path, api_key=SecretStr(""))
+    close_for(tmp_path)
     client = TestClient(create_app(settings))
     space = client.post("/api/spaces", json={"content": "space"}).json()
     conv = client.post(f"/api/spaces/{space['id']}/conversations").json()
     url = f"/api/conversations/{conv['id']}/messages"
     assert client.post(url, json={"content": "hello"}).status_code == 503
     assert client.get(url).json() == []
+    close_for(tmp_path)
     client = TestClient(create_app(settings, Scripted([ModelError("模型服务暂不可用")])))
     result = client.post(url, json={"content": "hello"}).json()
     assert result["state"] == "failed"
@@ -231,6 +235,7 @@ def test_duplicate_tool_call_is_not_reexecuted_and_budget_stops(tmp_path):
         {"role": "assistant", "content": "根据已有信息解释，后续还需要确认。"},
     ]
     settings = Settings(_env_file=None, data_root=tmp_path, max_steps=3)
+    close_for(tmp_path)
     client = TestClient(create_app(settings, model))
     result = client.post(
         f"/api/conversations/{conv['id']}/messages", json={"content": "解释资料"}
@@ -267,9 +272,12 @@ def test_same_conversation_rejects_overlapping_requests(tmp_path):
                 return {"role": "assistant", "content": "解释"}, {}
 
         app = create_app(Settings(_env_file=None, data_root=tmp_path), Waiting())
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client,
+        ):
             space = (await client.post("/api/spaces", json={"content": "学习"})).json()
             conv = (await client.post(f"/api/spaces/{space['id']}/conversations")).json()
             url = f"/api/conversations/{conv['id']}/messages"

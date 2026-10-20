@@ -1,6 +1,6 @@
 import json
 
-from fastapi.testclient import TestClient
+from client_helpers import TestClient, close_for
 from test_learning import Scripted, call, setup
 
 from learning_agent.app import create_app
@@ -52,6 +52,7 @@ def test_feedback_anchors_actual_answer_and_state_survives_restart(tmp_path):
     assert state["feedback"][0]["target_run_id"] == first["run_id"]
     # Delivery is terminal: no additional model request to store notes or restate the answer.
     assert len(model.inputs) == 2
+    close_for(tmp_path)
     with TestClient(
         create_app(Settings(_env_file=None, data_root=tmp_path), Scripted([]))
     ) as restarted:

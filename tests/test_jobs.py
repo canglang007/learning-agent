@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import test_media
-from fastapi.testclient import TestClient
+from client_helpers import TestClient, close_for
 from test_learning import Scripted
 
 from learning_agent.app import create_app
@@ -234,6 +234,7 @@ def test_transcript_result_saved_before_crash_is_reused(tmp_path, clip, monkeypa
 
 def test_job_api_validation_offline_and_pause_cancel(tmp_path):
     settings, store, space, _jobs = setup(tmp_path, embedding_provider="ollama")
+    close_for(tmp_path)
     client = TestClient(create_app(settings, Scripted([])))
     assert client.get(f"/api/spaces/{space}/jobs").json() == {"worker_online": False, "jobs": []}
     item = client.post(f"/api/spaces/{space}/retrieval").json()
@@ -266,6 +267,7 @@ def test_failed_preview_never_serves_partial_output_and_can_retry(tmp_path, clip
     from learning_agent import media
 
     settings, _, space, jobs = setup(tmp_path)
+    close_for(tmp_path)
     client = TestClient(create_app(settings, Scripted([])))
     item = client.post(f"/api/spaces/{space}/materials", files={"file": ("clip.mkv", clip)}).json()
     playback = f"/api/spaces/{space}/materials/{item['id']}/playback"

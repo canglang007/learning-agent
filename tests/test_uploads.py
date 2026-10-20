@@ -1,8 +1,8 @@
 import asyncio
 
 import pytest
+from client_helpers import TestClient, close_for
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 from test_learning import Scripted
 from test_media import clip  # noqa: F401 -- pytest fixture
 
@@ -15,6 +15,7 @@ from learning_agent.uploads import Uploads
 
 def setup(tmp_path):
     settings = Settings(_env_file=None, data_root=tmp_path)
+    close_for(tmp_path)
     client = TestClient(create_app(settings, Scripted([])))
     space = client.post("/api/spaces", json={"content": "course"}).json()["id"]
     return settings, client, space
@@ -33,6 +34,7 @@ def test_resume_drops_unacknowledged_tail_and_complete_is_idempotent(tmp_path, c
     path = tmp_path / "uploads" / item["id"] / "upload.part"
     with path.open("ab") as file:
         file.write(b"unconfirmed tail")
+    close_for(tmp_path)
     client = TestClient(create_app(settings, Scripted([])))
     assert client.get(base).json()["received"] == 100
     assert client.patch(base, content=b"wrong", headers={"Upload-Offset": "0"}).status_code == 409

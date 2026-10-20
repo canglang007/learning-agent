@@ -3,7 +3,7 @@ import json
 import sqlite3
 
 import pytest
-from fastapi.testclient import TestClient
+from client_helpers import TestClient, close_for
 from PIL import Image
 from test_learning import Scripted, call, setup
 from test_pdf import prepared as pdf_setup
@@ -35,6 +35,7 @@ def test_long_history_is_omitted_without_deleting_original_or_repeating_injectio
             {"role": "assistant", "content": "新的讲解"},
         ],
     )
+    close_for(tmp_path)
     client = TestClient(create_app(small_settings(tmp_path), model))
     url = f"/api/conversations/{conv['id']}/messages"
     first = client.post(url, json={"content": "旧问题"}).json()
@@ -64,6 +65,7 @@ def test_budget_checked_after_tool_and_failed_groups_archived_but_not_replayed(t
         call("read_passage", {"material_id": material["id"], "start_line": 1, "end_line": 1}),
         {"role": "assistant", "content": "新的问题可以直接解释。"},
     ]
+    close_for(tmp_path)
     client = TestClient(create_app(small_settings(tmp_path), model))
     url = f"/api/conversations/{conv['id']}/messages"
     failed = client.post(url, json={"content": "读取这份资料"}).json()
@@ -84,6 +86,7 @@ def test_budget_checked_after_tool_and_failed_groups_archived_but_not_replayed(t
 
 def test_required_question_too_large_never_calls_model(tmp_path):
     client, model, _, _, conv = setup(tmp_path, [])
+    close_for(tmp_path)
     client = TestClient(create_app(small_settings(tmp_path), model))
     result = client.post(
         f"/api/conversations/{conv['id']}/messages", json={"content": "大" * 6000}
@@ -104,6 +107,7 @@ def test_feedback_excerpt_keeps_whole_target_paragraph_and_original_answer(tmp_p
             {"role": "assistant", "content": "针对公式解释。"},
         ],
     )
+    close_for(tmp_path)
     client = TestClient(create_app(small_settings(tmp_path), model))
     url = f"/api/conversations/{conv['id']}/messages"
     first = client.post(url, json={"content": "解释"}).json()
@@ -128,6 +132,7 @@ def test_feedback_excerpt_keeps_whole_target_paragraph_and_original_answer(tmp_p
 def test_ambiguous_or_missing_feedback_focus_does_not_guess_excerpt(tmp_path, focus):
     answer = "同一步\n\n" + "甲" * 6000 + "\n\n同一步\n\n" + "乙" * 6000
     client, model, _, _, conv = setup(tmp_path, [{"role": "assistant", "content": answer}])
+    close_for(tmp_path)
     client = TestClient(create_app(small_settings(tmp_path), model))
     url = f"/api/conversations/{conv['id']}/messages"
     first = client.post(url, json={"content": "解释"}).json()
@@ -242,6 +247,7 @@ def test_legacy_migration_retains_full_original_and_uses_visible_messages_once(t
     run = store.start_run(conv["id"], "旧问题")
     store.finish_run(run, "completed", "旧答案", old)
     model = Scripted([{"role": "assistant", "content": "新答案"}])
+    close_for(tmp_path)
     client = TestClient(create_app(small_settings(tmp_path), model))
     assert (
         client.post(f"/api/conversations/{conv['id']}/messages", json={"content": "追问"}).json()[
@@ -291,6 +297,7 @@ def test_same_turn_image_restore_reuses_asset_and_duplicate_guard_still_stops(
         context_output_reserve_tokens=512,
         context_headroom_tokens=512,
     )
+    close_for(tmp_path)
     client = TestClient(create_app(settings, model))
     result = client.post(
         f"/api/conversations/{conv}/messages", json={"content": "对照图与笔记解释"}
