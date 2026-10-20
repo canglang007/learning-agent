@@ -18,6 +18,7 @@ from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
 from learning_agent.memory import ContextSettings, MemoryCreate, MemoryEdit, TopicCreate
 from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
+from learning_agent.model_registry import status as model_status
 from learning_agent.references import resolve_references
 from learning_agent.retrieval import Retriever
 from learning_agent.run_store import TERMINAL, RuntimeUnavailable
@@ -144,6 +145,7 @@ def create_app(settings=None, provider=None):
             "asr_provider": settings.asr_provider,
             "retrieval": settings.retrieval_mode,
             "embedding_provider": settings.embedding_provider,
+            "capabilities": model_status(settings),
             "verification": "inspect_actual_run_results",
             "worker_online": jobs.online(),
             "runtime_online": runtime.task is not None
