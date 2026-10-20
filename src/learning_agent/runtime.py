@@ -389,6 +389,14 @@ class RunControl:
             return cached["message"], cached["usage"]
         if purpose == "main_model":
             self.store.revoke_draft(self.run_id, self.owner, "new_model_request")
+        if self.runtime.settings.evaluation_budget_path:
+            from learning_agent.evaluation.ledger import EvaluationBudgetExceeded, Ledger
+
+            try:
+                Ledger(self.runtime.settings.evaluation_budget_path).reserve(op["id"], purpose)
+            except EvaluationBudgetExceeded:
+                self.emit("evaluation.budget_exhausted", {"purpose": purpose})
+                raise
         self.emit("model.started", {"step": step, "purpose": purpose})
         self.store.send_operation(self.run_id, self.owner, op["id"])
         started = time.monotonic()

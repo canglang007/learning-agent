@@ -7,7 +7,7 @@ from learning_agent.context import profile_id
 from learning_agent.provider import ModelError
 from learning_agent.run_store import RunStopped, RuntimeConflict, now
 
-EXECUTION_VERSION = "learning-loop-v2"
+EXECUTION_VERSION = "learning-loop-v3"
 
 
 def execution_profile(settings):

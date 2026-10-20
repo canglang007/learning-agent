@@ -1,0 +1,8 @@
+{
+  "bm25": {
+    "retrieval_mode": "bm25"
+  },
+  "rrf": {
+    "retrieval_mode": "hybrid"
+  }
+}

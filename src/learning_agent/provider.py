@@ -240,17 +240,20 @@ class OpenAIProvider:
         assembly = StreamAssembly(settings.protocol)
         mode = "sse"
         try:
-            async with httpx.AsyncClient(
-                transport=self.transport, timeout=settings.timeout_seconds
-            ) as client, client.stream(
-                "POST",
-                settings.base_url.rstrip("/") + request.endpoint,
-                headers={
-                    "Authorization": "Bearer " + settings.api_key.get_secret_value(),
-                    "Content-Type": "application/json",
-                },
-                content=body,
-            ) as response:
+            async with (
+                httpx.AsyncClient(
+                    transport=self.transport, timeout=settings.timeout_seconds
+                ) as client,
+                client.stream(
+                    "POST",
+                    settings.base_url.rstrip("/") + request.endpoint,
+                    headers={
+                        "Authorization": "Bearer " + settings.api_key.get_secret_value(),
+                        "Content-Type": "application/json",
+                    },
+                    content=body,
+                ) as response,
+            ):
                 response.raise_for_status()
                 if "application/json" in response.headers.get("content-type", ""):
                     mode = "json_fallback"

@@ -1,0 +1,151 @@
+{
+  "id": "retrieval-component-v1",
+  "version": "1",
+  "queries": [
+    {
+      "id": "pre_zh",
+      "question": "CS336归一化放在子层之前，为何不影响残差直通？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            10,
+            11,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pre_en",
+      "question": "pre-norm main residual signal path LayerNorm",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            10,
+            11,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rms_definition",
+      "question": "RMSNorm分母里的范数与均方根定义",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            14
+          ]
+        }
+      ]
+    },
+    {
+      "id": "runtime",
+      "question": "为什么归一化浮点运算量少但耗时多？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            16
+          ]
+        },
+        {
+          "asset": "cs_video",
+          "anchors": [
+            859
+          ],
+          "time_basis": "clip"
+        }
+      ]
+    },
+    {
+      "id": "runtime_en",
+      "question": "FLOPs are not runtime memory movement",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            16
+          ]
+        },
+        {
+          "asset": "cs_video",
+          "anchors": [
+            859
+          ]
+        }
+      ]
+    },
+    {
+      "id": "double_norm",
+      "question": "残差分支前后都放LayerNorm但不在主干上",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            13
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gradient",
+      "question": "pre norm gradient stability larger learning rate",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            12,
+            19
+          ]
+        }
+      ]
+    },
+    {
+      "id": "regularization",
+      "question": "为什么正则化偏好简单模型？",
+      "expected": [
+        {
+          "asset": "optimization",
+          "pages": [
+            14
+          ]
+        }
+      ]
+    },
+    {
+      "id": "matrix_scan",
+      "question": "矩阵乘法 A2x3 B3x4 结果的形状",
+      "expected": [
+        {
+          "asset": "worksheet",
+          "pages": [
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dot_product",
+      "question": "英文笔记中内积和矩阵乘法的区别",
+      "expected": [
+        {
+          "asset": "notes"
+        }
+      ]
+    },
+    {
+      "id": "absent_gpu",
+      "question": "这门课程是否有我的4060上pre-norm的精确实测加速倍数？",
+      "expected": []
+    },
+    {
+      "id": "absent_exam",
+      "question": "课程下次考试的个人座位号是什么？",
+      "expected": []
+    }
+  ]
+}

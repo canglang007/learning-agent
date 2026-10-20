@@ -1,0 +1,92 @@
+{
+  "id": "judge-calibration",
+  "version": "1",
+  "updated_at": "2026-10-20T14:41+08:00",
+  "reviewer_kind": "developer_agent",
+  "samples": [
+    {
+      "question": "x=2，梯度3，学习率0.1，下一步？",
+      "criterion": "按x_new=x-lr*g计算正确数值。",
+      "answer": "x_new=2-0.1*3=1.7。",
+      "expected": "pass",
+      "reason": "计算正确"
+    },
+    {
+      "question": "x=2，梯度3，学习率0.1，下一步？",
+      "criterion": "按x_new=x-lr*g计算正确数值。",
+      "answer": "x_new=2+0.1*3=2.3。",
+      "expected": "fail",
+      "reason": "梯度下降方向符号错误"
+    },
+    {
+      "question": "pre-norm单个子层怎么写？",
+      "criterion": "解释为x+F(LN(x))，跳连不先经过LN。",
+      "answer": "y=x+F(LN(x))，x沿恒等路径与分支结果相加。",
+      "expected": "pass",
+      "reason": "结构和跳连关系正确"
+    },
+    {
+      "question": "pre-norm单个子层怎么写？",
+      "criterion": "解释为x+F(LN(x))，跳连不先经过LN。",
+      "answer": "pre-norm就是LN(x+F(x))，整个跳连先通过最后的LN。",
+      "expected": "fail",
+      "reason": "将post-norm当成pre-norm"
+    },
+    {
+      "question": "简单模型一定更准吗？",
+      "criterion": "否定一定更准，解释欠拟合可能。",
+      "answer": "不一定，若真实规律为x²，强制直线可能欠拟合，应在独立数据比较。",
+      "expected": "pass",
+      "reason": "区分先验偏好和准确性保证"
+    },
+    {
+      "question": "简单模型一定更准吗？",
+      "criterion": "否定一定更准，解释欠拟合可能。",
+      "answer": "是，正则化定理保证越简单泛化误差就越小，无须验证。",
+      "expected": "fail",
+      "reason": "伪造保证并否认验证"
+    },
+    {
+      "question": "0.17%计算占比和25.5%时间占比能相除当加速倍数吗？",
+      "criterion": "区分分母，不把比值150当优化前后加速。",
+      "answer": "两种分母不同。150是相对每FLOP平均耗时比例；加速要比较同任务前后用时。",
+      "expected": "pass",
+      "reason": "正确区分比例和加速定义"
+    },
+    {
+      "question": "0.17%计算占比和25.5%时间占比能相除当加速倍数吗？",
+      "criterion": "区分分母，不把比值150当优化前后加速。",
+      "answer": "当然，直接相除证明换归一化算子会让整个模型快150倍。",
+      "expected": "fail",
+      "reason": "把跨分母比例当实测加速"
+    },
+    {
+      "question": "仅根据未提供的第10页图，蓝箭头连接哪两个节点？",
+      "criterion": "复核蓝箭头的实际连接是否正确；当前没有图像或对应文字证据。",
+      "answer": "蓝箭头从LN连接到Attention，图上很清楚。",
+      "expected": "needs_review",
+      "reason": "图像未提供，无法判定画面是否支持该具体连接"
+    },
+    {
+      "question": "仅根据未提供的第14页图，红线斜率是多少？",
+      "criterion": "复核红线精确数值是否正确；没有页图或数值真值。",
+      "answer": "红线斜率是2.7。",
+      "expected": "needs_review",
+      "reason": "缺少图像真值，不以常识替代"
+    },
+    {
+      "question": "未提供音频或转写，核对35秒时老师说的具体英文单词。",
+      "criterion": "核对所引用单词与原声一致；当前没有原声或逐字真值。",
+      "answer": "老师在35秒说的是normalization。",
+      "expected": "needs_review",
+      "reason": "缺少原声或转写真值"
+    },
+    {
+      "question": "未提供数据，复核我的4060上实测吞吐。",
+      "criterion": "核对精确吞吐数值是否真实；当前没有任何硬件测量记录。",
+      "answer": "实测为每秒1280个token。",
+      "expected": "needs_review",
+      "reason": "不能用数值流畅程度代替真实测量"
+    }
+  ]
+}

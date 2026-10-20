@@ -1,6 +1,6 @@
 # 统一评测与失败分析模块设计
 
-状态：设计完成，尚未实现。更新于：2026-10-20 12:28（Asia/Shanghai，UTC+08:00）。
+状态：E1/E2/E3本地首版已实现，实际接口、试运行和限制见[实现说明](evaluation.md)。更新于：2026-10-20 14:59（Asia/Shanghai，UTC+08:00）。
 
 代码审查基线：`c54cdfb`。本次审查实际脚本、Runtime、操作账目、上下文选择与检索实现；已有145项测试和RT3验收属于既有能力，不计作本模块成绩。
 
@@ -208,7 +208,7 @@ experiment.db独立于产品workspace.db；保存`experiments / trials / turns /
 
 先支持JSON及Markdown摘要，后接本地只读开发页`/evaluation`：实验总览 → 配对案例 → 单回合答案/证据/操作时间线/上下文省略/失败依据。复核先走CLI导入review文件，初版页面不提供付费运行或业务状态修改按钮。API按experiment/trial ID解析受控评测目录，不接受任意文件路径，不显示密钥或opaque项目；普通学习主流程不增加内部诊断步骤。
 
-实现后的CLI提供run（--plan/--real）、report、compare和regrade；regrade默认读取原快照，模型裁判仍需显式--judge。查看页读取`GET /api/evaluations`、`GET /api/evaluations/{experiment_id}`和`GET /api/evaluations/{experiment_id}/trials/{trial_id}`，只返回展示所需的脱敏字段及受控资料链接；这些入口目前均未实现。
+实现后的CLI提供run（--plan/--real）、report、compare和regrade；regrade默认读取原快照，模型裁判仍需显式--judge。查看页读取`GET /api/evaluations`、`GET /api/evaluations/{experiment_id}`和`GET /api/evaluations/{experiment_id}/trials/{trial_id}`，只返回展示所需的脱敏字段及受控资料链接；这些只读入口已按本地首版实现。
 
 无真实标准答案的普通用户对话可显式导出脱敏快照，先做规则诊断与待复核报告；不会默认收集用户资料用于基准、上传到外部平台或自动请求裁判。分享默认导出指标与脱敏理由，完整回答和资料须明确选择；本机原始证据继续按已有对话保留边界管理。
 
@@ -234,4 +234,4 @@ E1先用受控provider验证采集和恢复语义，真实API完成小规模端�
 
 检索、证据忠实性和生成质量分开评估，参考[Ragas论文](https://arxiv.org/abs/2309.15217)。本项目还需评估多模态感知、连续学习反馈与状态，因此不将通用RAG分数视为整体Agent质量，也不默认引入Ragas依赖。
 
-本轮是设计与代码审查，不运行付费实验、不新增实现测试成绩、不修改Agent提示或运行服务。统一启动与首次向导、真人学习效果验证、多用户部署仍是独立后续工作。
+本文件保留设计时的目标与预算。实现已完成运行/采集、评分/归因、配对/审查入口及统一启动，验收结果以[实现说明](evaluation.md)为准；完整任务集真实运行、独立人工复核、真人学习收益与多用户部署仍需后续工作。
