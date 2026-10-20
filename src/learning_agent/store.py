@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -113,14 +112,10 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=5)
-        db.execute("PRAGMA busy_timeout=5000")
-        db.row_factory = sqlite3.Row
-        try:
-            with db:
-                yield db
-        finally:
-            db.close()
+        from learning_agent.database import connection
+
+        with connection(self.path) as db:
+            yield db
 
     def space(self, name):
         item = {"id": str(uuid4()), "name": name}
