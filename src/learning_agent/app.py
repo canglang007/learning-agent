@@ -134,6 +134,7 @@ def create_app(settings=None, provider=None):
             "model": settings.model,
             "protocol": settings.protocol,
             "configured": bool(settings.api_key.get_secret_value()) or provider is not None,
+            "stream_answer": settings.stream_answer,
             "materials": ["txt", "md", "pdf", "audio", "video"],
             "vision": settings.enable_vision,
             "video": True,

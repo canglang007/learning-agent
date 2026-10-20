@@ -1,12 +1,12 @@
-# 问答执行、交互与恢复（RT1 / RT2）
+# 问答执行、交互与恢复（RT1 / RT2 / RT3）
 
-更新于：2026-10-20 11:46（Asia/Shanghai，UTC+08:00）。
+更新于：2026-10-20 12:15（Asia/Shanghai，UTC+08:00）。
 
-RT1已实现持久提交、后台执行、进度订阅、刷新恢复、取消和事务交付；RT2补齐执行检查点、恢复与明确重试、远端操作边界和受控图像产物。执行器仍驱动现有Agent循环：模型根据观察选择工具，再继续讲解；调度层负责执行的生命周期，不替代模型的行动选择。
+RT1已实现持久提交、后台执行、进度订阅、刷新恢复、取消和事务交付；RT2补齐执行检查点、恢复与明确重试、远端操作边界和受控图像产物。RT3补齐两种协议的正文草稿流、刷新恢复与撤销，以及真实课程验收。执行器仍驱动现有Agent循环：模型根据观察选择工具，再继续讲解；调度层负责执行的生命周期，不替代模型的行动选择。
 
 ## 使用流程
 
-在网页发送问题后，问题与任务一起保存，接口立即返回任务ID。任务卡显示排队、模型请求、工具开始/返回和完成等实际事件。讲解正文经过原有校验后一次展示，当前不是正文逐字流式。
+在网页发送问题后，问题与任务一起保存，接口立即返回任务ID。任务卡显示排队、模型请求、工具开始/返回和完成等实际事件。启用`LA_STREAM_ANSWER=true`后，正文以“正在生成，尚未提交”的草稿逐步展示；完整参数与学习记录校验成功并提交后，替换为带Markdown/公式渲染和反馈入口的正式答案。默认false时仍显示真实进度并一次交付正文。
 
 刷新或关闭网页不取消任务。重新打开该会话，网页查询最新任务并补读事件；SSE连接失败时改为查询状态和事件。状态以SQLite记录为准，浏览器连接断开不等于问答失败。用户可以切换会话，其他会话的问题进入同一队列。
 
@@ -19,7 +19,7 @@ API进程退出后不会继续执行。重新启动API时：
 - 主模型请求结果未知时等待用户勾选可能再次计费的确认，再点击“确认后重试模型请求”，也可结束本轮。摘要与查询向量结果未知时不补发，分别沿用裁减和BM25。
 - 已完成或已取消的结果继续保留。
 
-旧RT1任务没有完整执行状态时仍不能中途续跑，提供结束入口；迁移不虚构检查点，也不调用模型。RT2任务保留同一个运行ID、用户问题和反馈，恢复不重置预算。
+旧RT1任务没有完整执行状态时仍不能中途续跑，提供结束入口；迁移不虚构检查点，也不调用模型。RT2之后的任务保留同一个运行ID、用户问题和反馈，恢复不重置预算。RT3将流式策略纳入冻结执行配置；旧版本待处理任务若配置不兼容，会明确中断，提供结束入口，不虚构新配置。既有完成结果不受影响。
 
 ## 执行结构
 
@@ -50,6 +50,7 @@ flowchart LR
 | `run_events` | 每个任务单调递增seq，供SSE和查询补读；只发布进度、工具名和位置等摘要，不发布思维链 |
 | `run_operations` | 主模型、摘要、查询向量与工具的逻辑位置和尝试；保存prepared/sending/returned/unknown/failed/returned_invalid、结果、usage状态、时间及图像预留 |
 | `run_checkpoints` | schema v2与修订、prepare/model/tools/ready_to_commit阶段、协议组、批次游标、观察缓存、计数、摘要与待提交状态；与操作记录一起决定下一步 |
+| `run_drafts` | 当前正文草稿、操作ID、epoch、状态与字符偏移；与聊天和学习上下文隔离 |
 | `run_actions` | 恢复操作ID、期望修订和确认参数；操作响应丢失时可以同ID确认 |
 | 原有协议档案和上下文快照 | 保存已观察到的资料、输入选择及诊断；取消/失败档案不自动重放 |
 
@@ -65,7 +66,7 @@ flowchart LR
 | --- | --- |
 | `POST /api/conversations/{id}/runs` | JSON包含content、必需的client_request_id及可选focus/feedback，返回202与任务ID、查询及事件地址 |
 | `GET /api/conversations/{id}/runs` | status=active/all、limit=1..50、before=返回记录的cursor；按创建顺序倒序 |
-| `GET /api/runs/{id}` | 状态、最后事件seq、正式答案/系统结果、可用动作，以及原有工具轨迹和上下文诊断 |
+| `GET /api/runs/{id}` | 状态、最后事件seq、正式答案/系统结果、可用动作、draft快照，以及原有工具轨迹和上下文诊断 |
 | `GET /api/runs/{id}/events?after=0` | 默认返回JSON事件列表，最多100条，可继续补读 |
 | 同一事件接口，Accept: text/event-stream | SSE事件名为progress，data中的type说明业务事件；id为持久seq，Last-Event-ID优先于after |
 | `POST /api/runs/{id}/resume` | JSON包含action_id、expected_revision与acknowledge_unknown_request；同操作ID同参数幂等，过期修订或缺少未知费用确认返回409 |
@@ -90,7 +91,7 @@ PDF和视频画面工具使用按需启动的子进程；其FFmpeg共享所属�
 
 ## 验证与限制
 
-- 全量127项测试通过，其中20项RT2专项覆盖真正的子进程强杀与重启：prepared、完整响应、部分工具批次、ready答案、未知主请求的明确且幂等重试、摘要/向量结果复用或降级、Responses原生项目、资料版本竞态、预算和恢复上限、缺图重建、渲染取消及父进程退出后的子进程清理。可控模型验证工程语义，不是云端效果评估。
+- 全量145项测试通过，新增18项RT3专项覆盖分块中文/表情/公式、两种流式协议、同请求JSON降级、明确拒绝/截断/无效响应、终止标记后主动关闭连接、合并写入、草稿刷新/回放/撤销、校验纠正后的新epoch，以及真实子进程在流中/完整返回后被强杀的恢复边界。原有20项RT2专项覆盖真正的子进程强杀与重启：prepared、完整响应、部分工具批次、ready答案、未知主请求的明确且幂等重试、摘要/向量结果复用或降级、Responses原生项目、资料版本竞态、预算和恢复上限、缺图重建、渲染取消及父进程退出后的子进程清理。可控模型验证工程语义，不是云端效果评估。
 - 真实兼容Chat Completions网关使用gpt-6.1-sol和既有CS231n课程optimization.pdf第14页：首个模型响应落库后SIGKILL，重启接着执行inspect_page及最终讲解；两次主模型请求各一个attempt，没有重发首个请求，总墙钟约13.4秒，学习状态更新一次。核对实际图像与回答的5个数据点、复杂曲线/简单直线及正则化含义相符。单例不构成大规模教学或性能基准，Responses仍只有离线验证。
 - RT1既有两轮真实调用与刷新、断线降级、取消、提交响应丢失验收继续保留。RT2网页用受控模型核对未知结果提示、确认前按钮禁用、明确重试、同一任务交付，以及消息快照早于终态时自动补读答案。
 
@@ -103,4 +104,46 @@ uv run python examples/evaluate_recovery.py --real \
 
 资料自行提供；测试不自动下载课程，不自动重试未知模型请求。原资料和报告在被忽略的data目录，密钥不进入报告。
 
-RT3尚未实现正文流式、分块JSON/公式适配及更完整的课程交互验收。当前仍是本机单用户、单API进程，无多租户授权或分布式接管；操作系统文件锁只支持已有macOS/Linux边界。完整规划见[模块设计](agent-runtime-design.md)。
+RT3已补齐下述流式与综合验收。当前仍是本机单用户、单API进程，无多租户授权或分布式接管；操作系统文件锁只支持已有macOS/Linux边界。完整规划见[模块设计](agent-runtime-design.md)。
+
+
+## RT3：正文草稿与网关配置
+
+`LA_STREAM_ANSWER`默认false。它进入冻结执行配置，绑定当前网关、型号和协议；切换配置应先结束当前问答。已真实验证配置为surplustoken.com/v1、gpt-6.1-sol、Chat Completions；其他网关和Responses流式需要另行验证。摘要继续使用非流式请求。
+
+`provider.send_stream`只发送一次HTTP请求，Chat Completions按索引拼装tool_calls及usage，Responses依据类型拼装参数并以response.completed中的原生输出为准。两者分别遵循[Chat流式事件](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)和[Responses流式事件](https://developers.openai.com/api/reference/resources/responses/streaming-events)，不混用事件结构。收到协议终止标记后主动关闭连接，不等待网关额外关闭空闲连接。
+
+请求stream但网关在同一连接返回application/json时，按完整响应接收，事件标记json_fallback。明确拒绝流式时本轮报告HTTP状态与关闭配置的办法，不自动重发；连接在完整终止标记前断开属于结果未知，沿用RT2明确重试规则。不会为了制造正文动画再请模型改写答案。
+
+`streaming.py`只从单个deliver_explanation调用的根对象answer字符串，或直接回答content中，提取完整解码字符。嵌套answer、其他参数、reasoning及加密项目不进入公开草稿。半个转义或Unicode代理对等待下一块，完整工具参数仍需JSON/Pydantic校验；重复JSON键不接受。后续出现第二个工具、投影改变或讲解参数无效时撤销该草稿，Agent可按原循环纠正参数。不会执行半段工具调用或把半段state_update写进学习状态。
+
+首段解码文本立即保存，之后按128字符或后续分块到达时距上次写入200ms合并，结束时刷新尾段。不是逐token写SQLite，也不承诺网络静默时200ms定时刷新。浏览器草稿使用textContent，不对半段Markdown/公式/HTML执行渲染；最终答案仍走本地安全Markdown与KaTeX。
+
+公开draft快照包含epoch、status、text、offset、updated_at。answer.delta事件包含epoch、offset和text，offset为新增片段的起点，按Unicode码点计数（浏览器使用Array.from，不使用UTF-16长度）；新尝试使用新的epoch。draft.validating表示等待完整交付，draft.revoked表示撤销。快照和last_event_seq在同一个读事务取得，增量与快照在同一个写事务保存，刷新后按游标和偏移去重。JSON轮询也返回完整快照，事件缺口可重新同步，不拼接不同尝试。
+
+草稿仅在run_drafts与公开进度中存在，不写messages、协议历史或学习状态，不提供理解反馈入口。取消、中断、失败在状态事务中撤销草稿；有效交付在原终态事务中确认草稿并写唯一正式答案。重启可以保留撤销草稿供查看，接续的是操作检查点，不是从某个token偏移恢复云端生成。即使复用完整已落库响应，重启前撤销的草稿也不重新认定为正式答案，最终提交结果独立展示。
+
+## RT3验收结果
+
+既有CS231n optimization.pdf物理第14页、连续纠正“简单模型一定更准”的追问、CS336 pre-norm课程短片20–75秒联合查阅，三轮均完成。使用既有本地ASR转写，未新增ASR费用；图像与转写由开发Agent实际核对，不能等同独立人工评审或用户学习实验。
+
+| 回合 | 首个模型进度 | 首段草稿 | 完整保存 | 草稿写入事件 |
+| --- | ---: | ---: | ---: | ---: |
+| PDF图表解释 | 0.031秒 | 10.377秒 | 17.232秒 | 13 |
+| 连续追问纠正 | 0.035秒 | 4.453秒 | 11.914秒 | 16 |
+| 视频转写+三帧联合解释 | 0.038秒 | 12.076秒 | 20.102秒 | 18 |
+
+三轮均为sse，共5次主模型请求，每次一个attempt，usage均由网关返回；提交去重与草稿快照查询未新增请求。仅代表此模型/网关与这三个样例，不是性能对照实验或费用保证。PDF回答区分样本拟合与测试泛化，数值例子明确标为构造；视频回答与实际抽样帧中的pre/post-norm及最终LayerNorm相符，00:35–00:56回听范围与转写对齐。
+
+隔离浏览器验收覆盖草稿刷新一致、表情/转义保留、HTML按文本显示、正式答案替换及公式渲染、禁用EventSource后的轮询恢复、停止后撤销且不新增反馈；受控流断开和明确重试的记录留在本地。故障与取消主要用无费用受控模型，未为每个故障重复付费调用。
+
+可复现真实验收（使用已有课程文件，不自动下载、转写或重试）：
+
+```bash
+uv run python examples/evaluate_streaming.py --real \
+  --output data/evaluations/runtime-stream-new \
+  --pdf path/to/optimization.pdf --page 14 \
+  --media path/to/course-clip.mp4 --captions-json path/to/asr-segments.json
+```
+
+字幕JSON需含segments数组，每项含start、end、text。该脚本复用此前课程ASR片段，来源明确标为复用转写；PDF与视频路径须自行提供。报告、原始观察、DB和图片留在忽略的data，调试与复盘记录留在notes。

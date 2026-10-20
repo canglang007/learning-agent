@@ -2,6 +2,29 @@ const pendingRunStates=['queued','running','cancelling','interrupted'];
 const runStateNames={queued:'等待执行',running:'正在处理',cancelling:'正在停止当前操作',interrupted:'本轮已中断',completed:'讲解已完成',budget_exhausted:'已在预算限制下交付',failed:'本轮未完成',cancelled:'本轮已停止'};
 const toolNames={list_materials:'查看资料目录',search_materials:'搜索资料',material_outline:'查看资料导航',read_context:'补读前后文',read_passage:'读取文字',read_page:'读取PDF文字',inspect_page:'查看PDF图像',inspect_media:'查阅音视频片段',recall_learning_context:'核对历史原话',deliver_explanation:'交付讲解'};
 let runtimeBinding=0, runtimeSource=null, runtimeTimer=null, selectedRun=null, runtimeCursor=0;
+let draftGap=false;
+function paintDraft(){
+  const draft=selectedRun?.draft,show=draft&&draft.status!=='committed'&&!['completed','budget_exhausted'].includes(selectedRun.state);
+  $('runtime-draft').hidden=!show;
+  $('runtime-draft-text').textContent=show?draft.text:'';
+  $('runtime-draft-label').textContent=draft?.status==='revoked'?'未完成草稿 · 已撤销，不能作为答案或反馈对象':draft?.status==='validating'?'讲解草稿 · 正在校验并保存':'讲解草稿 · 正在生成，尚未提交';
+}
+function applyDraftEvent(event){
+  if(!selectedRun)return;
+  const p=event.payload||{},old=selectedRun.draft;
+  if(old&&p.epoch<old.epoch)return;
+  if(event.type==='answer.delta'){
+    let draft=old;
+    if(!draft||p.epoch>draft.epoch)draft={epoch:p.epoch,offset:0,text:'',status:'generating'};
+    const size=Array.from(p.text).length;
+    if(p.offset>draft.offset){draftGap=true;return;}
+    if(p.offset===draft.offset){draft={...draft,text:draft.text+p.text,offset:draft.offset+size};selectedRun.draft=draft;}
+    // Replayed events already included in a snapshot are harmless.
+  }else if(old&&p.epoch===old.epoch){
+    selectedRun.draft={...old,status:event.type==='draft.revoked'?'revoked':'validating'};
+  }
+  paintDraft();
+}
 const submissionKey=cid=>'learning-submit:'+cid;
 function savedSubmission(cid){try{return JSON.parse(localStorage.getItem(submissionKey(cid))||'null');}catch{return null;}}
 function stopRunSubscription(){if(runtimeSource)runtimeSource.close();runtimeSource=null;clearTimeout(runtimeTimer);runtimeTimer=null;}
@@ -14,12 +37,15 @@ function runEventLabel(event){
   return {'run.accepted':'问题已保存','run.started':'开始处理','run.resumed':'已接续本轮执行','asset.restored':'已重新生成缺失图像','run.cancel_requested':'已收到停止请求','run.interrupted':'执行已中断，已有记录保留','run.completed':'本轮讲解已保存','run.failed':'本轮未完成','run.cancelled':'本轮已停止','context.reduced':'已按预算选择历史与图像','summary.finished':'历史整理已结束'}[event.type]||'任务状态已更新';
 }
 function appendRunEvents(events){
-  for(const event of events){if(event.seq<=runtimeCursor)continue;runtimeCursor=event.seq;const li=document.createElement('li');li.textContent=runEventLabel(event);$('runtime-progress').append(li);}
+  for(const event of events){if(event.seq<=runtimeCursor)continue;runtimeCursor=event.seq;
+    if(event.type==='answer.delta'||event.type.startsWith('draft.')){applyDraftEvent(event);continue;}
+    const li=document.createElement('li');li.textContent=event.type==='stream.mode'?(event.payload.mode==='json_fallback'?'网关返回完整响应，正在校验':'已连接正文流'):runEventLabel(event);$('runtime-progress').append(li);}
   while($('runtime-progress').children.length>8)$('runtime-progress').firstChild.remove();
 }
 function paintRun(run){
   if(!selectedRun||selectedRun.id!==run.id||selectedRun.revision!==run.revision)$('runtime-retry-ack').checked=false;
   selectedRun=run;$('runtime-panel').hidden=false;$('runtime-state').textContent=runStateNames[run.state]||run.state;
+  paintDraft();
   busy=pendingRunStates.includes(run.state);availability();
   $('runtime-cancel').hidden=!run.allowed_actions.includes('cancel');$('runtime-cancel').disabled=run.state==='cancelling';
   $('runtime-cancel').textContent=run.state==='interrupted'?'结束此轮，重新提问':run.state==='queued'?'取消排队':'停止本轮';
@@ -32,7 +58,7 @@ async function refreshRuntime(binding,cid,runId){
   try{
     const events=await api(`/runs/${runId}/events?after=${runtimeCursor}`);
     const run=await api(`/runs/${runId}`);if(binding!==runtimeBinding||cid!==conversation)return;
-    appendRunEvents(events);const wasPending=selectedRun&&pendingRunStates.includes(selectedRun.state);paintRun(run);
+    appendRunEvents(events);draftGap=false;const wasPending=selectedRun&&pendingRunStates.includes(selectedRun.state);paintRun(run);
     if(!pendingRunStates.includes(run.state)){
       stopRunSubscription();if(wasPending)await loadChat();return;
     }
@@ -46,6 +72,7 @@ function subscribeRun(binding,cid,run){
     if(binding!==runtimeBinding||cid!==conversation)return;
     try{
       const event=JSON.parse(message.data);appendRunEvents([event]);
+      if(draftGap){stopRunSubscription();await refreshRuntime(binding,cid,run.id);return;}
       if(['run.completed','run.failed','run.cancelled','run.interrupted'].includes(event.type)){
         source.close();await refreshRuntime(binding,cid,run.id);
       }else if(event.type==='run.started')paintRun({...selectedRun,state:'running'});
@@ -55,7 +82,7 @@ function subscribeRun(binding,cid,run){
   source.onerror=()=>{source.close();if(binding!==runtimeBinding)return;$('runtime-hint').textContent='进度连接中断，正在重新查询；任务继续运行。';runtimeTimer=setTimeout(()=>refreshRuntime(binding,cid,run.id),1000);};
 }
 async function bindRuntime(){
-  const binding=++runtimeBinding,cid=conversation;stopRunSubscription();selectedRun=null;runtimeCursor=0;$('runtime-progress').replaceChildren();
+  const binding=++runtimeBinding,cid=conversation;stopRunSubscription();selectedRun=null;runtimeCursor=0;draftGap=false;paintDraft();$('runtime-progress').replaceChildren();
   $('runtime-panel').hidden=!cid;$('runtime-retry-submit').hidden=!savedSubmission(cid);if(!cid){busy=false;availability();return;}
   busy=true;availability();
   try{

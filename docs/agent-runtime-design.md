@@ -1,12 +1,12 @@
 # 可恢复、可交互的问答执行模块设计
 
-状态：RT1/RT2已实现并验收，RT3待实现。更新于：2026-10-20 11:42（Asia/Shanghai，UTC+08:00）。设计审查基线：`0ef29ac`；下文保留完整目标方案，resume、循环检查点和受控图像产物已实现；正文流式仍为计划。当前实际能力与结果见[RT1实现说明](agent-runtime.md)。
+状态：RT1/RT2/RT3已实现并验收。更新于：2026-10-20 12:15（Asia/Shanghai，UTC+08:00）。设计审查基线：`0ef29ac`；下文保留原始设计问题与目标方案，当前实际能力、网关范围和结果见[实现说明](agent-runtime.md)。
 
 ## 1. 目标与设计时的代码缺口
 
 用户提交问题后能查看实际进度、刷新后继续查看、停止当前回答，并在服务重启后恢复有条件恢复的任务。运行恢复仍服务于准确讲解，不改变Agent根据观察自主选择工具的方式。
 
-| 实际代码 | 当前行为 | 本轮设计要补足的能力 |
+| 设计审查时的代码 | 当时行为 | 设计要补足的能力 |
 | --- | --- | --- |
 | `app.py:ask` | HTTP请求直接等待`run_turn`完成 | 提交、执行与订阅分离 |
 | `static/app.js:ask-form` | 一次POST等待最终JSON，本页`busy`管理交互 | 任务ID、实时事件、刷新后发现当前任务、取消和恢复入口 |
@@ -20,7 +20,7 @@
 | `Store.page_image/media_frame` | 读资料时会生成缓存图片，部分路径直接写最终文件 | 原子发布派生产物，取消或崩溃不留下可被误读的半文件 |
 | `jobs.py/worker.py` | 已实现媒体、ASR、索引任务及恢复 | 保持独立；可参考事务和所有者校验，不把教学循环塞入阻塞式媒体队列 |
 
-现有`except (ModelError, TimeoutError)`不覆盖进程退出或所有取消路径，可能在`finish_run`前留下running记录。已有档案能说明发生过什么，尚不能可靠恢复执行。现有95项测试是代码基线成绩，不是本模块验收结果。
+现有`except (ModelError, TimeoutError)`不覆盖进程退出或所有取消路径，可能在`finish_run`前留下running记录。已有档案能说明发生过什么，尚不能可靠恢复执行。设计时95项测试是历史基线成绩，不是本模块验收结果。
 
 ## 2. 用户流程与部署选择
 
@@ -219,7 +219,7 @@ RT1即引入prepared/returned等最小持久边界；未具备完整可恢复工
 
 RT1已新增`runtime.py`、`run_store.py`和`static/runtime.js`，事件接口合并在`app.py`；其余按后续阶段推进。原改动规划：新增`runtime.py`（调度、状态与取消）、`run_store.py`（事务和检查点）、`runtime_events.py`（事件格式/SSE）、受控渲染子进程入口和`static/runtime.js`（订阅和任务卡）；按实际复杂度合并小文件。`agent.py`重构为可继续的执行器；`provider.py/summaries.py/retrieval.py`增加远端操作边界；`store.py/memory.py/learning.py`统一未决会话校验与提交；图片/抽帧路径改原子产物。`jobs.py/worker.py`保持媒体任务职责。
 
-当前不要求迁移LangChain/LangGraph，不引入Redis/Celery，不扩展多租户调度、通用写入工具审批、用户在执行中插话重规划或云端持续运行。这些能力有独立需求时再设计；完整模块按上述RT1—RT3逐步交付，当前已交付RT1/RT2。
+当前不要求迁移LangChain/LangGraph，不引入Redis/Celery，不扩展多租户调度、通用写入工具审批、用户在执行中插话重规划或云端持续运行。这些能力有独立需求时再设计；完整模块按上述RT1—RT3逐步交付，当前已交付RT1/RT2/RT3。
 
 ## 11. 验收设计
 
@@ -254,4 +254,4 @@ RT1已新增`runtime.py`、`run_store.py`和`static/runtime.js`，事件接口�
 
 记录提交响应耗时、首个真实进度耗时、完整回答耗时、断线恢复情况、已完成操作复用情况、重复终态/消息数、远端请求与usage（未知单列）、取消后额外安排调用数。进度与恢复正确性单独评估，教学内容继续对照原页/字幕，不能用任务完成率或95项旧测试替代教学效果。
 
-新增可复现验收脚本拟为`examples/evaluate_runtime.py`，默认先做无费用工程模式；真实模式需显式指定、使用新输出目录，报告/DB/图片保存在data/evaluations。实验过程和复盘记录留在忽略的notes，不上传私有资料。当前文档阶段不新增测试成绩、不启动故障注入、不调用模型。
+已提供`examples/evaluate_runtime.py`、`evaluate_recovery.py`和`evaluate_streaming.py`；离线工程验证运行pytest，真实脚本需显式`--real`并使用新输出目录，报告/DB/图片保存在data/evaluations。实验过程和复盘记录留在忽略的notes；本模块的真实验收与边界见[实现说明](agent-runtime.md)。

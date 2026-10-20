@@ -323,7 +323,11 @@ async def run_turn(
                                 )
                             if control:
                                 message, usage = await control.model(
-                                    partial(provider.send, request), step=context_step
+                                    partial(provider.send, request),
+                                    step=context_step,
+                                    stream=partial(provider.send_stream, request)
+                                    if settings.stream_answer
+                                    else None,
                                 )
                             else:
                                 message, usage = await provider.send(request)
@@ -404,7 +408,11 @@ async def run_turn(
                                 },
                             )
                         try:
-                            args = json.loads(call["function"]["arguments"])
+                            from learning_agent.streaming import unique_object
+
+                            args = json.loads(
+                                call["function"]["arguments"], object_pairs_hook=unique_object
+                            )
                             fingerprint = (name, json.dumps(args, sort_keys=True))
                             if calls_used >= 12:
                                 observation = {"error": "budget_exhausted"}
@@ -612,6 +620,8 @@ async def run_turn(
                                 else "invalid_json",
                                 "detail": "工具参数需要合法JSON且符合字段约束",
                             }
+                        if control and name == "deliver_explanation" and observation.get("error"):
+                            store.revoke_draft(run_id, control.owner, "invalid_delivery")
                         if not observation.get("error") and name != "deliver_explanation":
                             material_id = observation.get("material_id")
                             observation_cache[fingerprint] = {

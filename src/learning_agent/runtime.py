@@ -364,7 +364,7 @@ class RunControl:
         finally:
             self.query_tasks.discard(current)
 
-    async def model(self, function, *, step, purpose="main_model", input_ref=None):
+    async def model(self, function, *, step, purpose="main_model", input_ref=None, stream=None):
         self.check()
         self.validate()
         self.verify_observed()
@@ -387,12 +387,19 @@ class RunControl:
             raise ModelError("摘要请求结果未知，本轮沿用裁减，不自动重发") from None
         if cached is not None:
             return cached["message"], cached["usage"]
+        if purpose == "main_model":
+            self.store.revoke_draft(self.run_id, self.owner, "new_model_request")
         self.emit("model.started", {"step": step, "purpose": purpose})
         self.store.send_operation(self.run_id, self.owner, op["id"])
         started = time.monotonic()
         try:
             async with asyncio.timeout(max(0.01, op["reserved_seconds"])):
-                result = await self.wait(function())
+                if stream is not None and purpose == "main_model":
+                    from learning_agent.drafts import DraftSink
+
+                    result = await self.wait(stream(DraftSink(self, op["id"])))
+                else:
+                    result = await self.wait(function())
             self.store.complete_operation(
                 self.run_id,
                 self.owner,
@@ -403,6 +410,8 @@ class RunControl:
             )
             return result
         except BaseException as error:
+            if purpose == "main_model":
+                self.store.revoke_draft(self.run_id, self.owner, "model_not_completed")
             state = (
                 "unknown"
                 if isinstance(error, (RunStopped, asyncio.CancelledError, TimeoutError))

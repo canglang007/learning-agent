@@ -14,6 +14,7 @@ def execution_profile(settings):
     # Effective policy is frozen; credentials and credential-bearing URLs are never stored.
     fields = (
         "timeout_seconds",
+        "stream_answer",
         "max_steps",
         "enable_vision",
         "max_images_per_turn",

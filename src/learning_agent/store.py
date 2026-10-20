@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from learning_agent.drafts import DraftStore
 from learning_agent.execution_store import ExecutionStore
 from learning_agent.memory import MemoryStore
 from learning_agent.run_store import (
@@ -19,7 +20,7 @@ from learning_agent.run_store import (
 )
 
 
-class Store(MemoryStore, ExecutionStore, RunStore):
+class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
     def __init__(self, root: Path):
         self.root = root
         (root / "materials").mkdir(parents=True, exist_ok=True)
@@ -108,6 +109,7 @@ class Store(MemoryStore, ExecutionStore, RunStore):
         self.init_memory()
         self.init_runtime()
         self.init_execution()
+        self.init_drafts()
 
     @contextmanager
     def connect(self):
@@ -575,6 +577,13 @@ class Store(MemoryStore, ExecutionStore, RunStore):
                 "UPDATE conversations SET protocol=? WHERE id=?",
                 (json.dumps(protocol), row["conversation_id"]),
             )
+            if state in SUCCESS:
+                db.execute(
+                    "UPDATE run_drafts SET status='committed',updated_at=? WHERE run_id=? AND status IN ('generating','validating')",
+                    (now(), run_id),
+                )
+            else:
+                self.revoke_draft_in(db, run_id, state)
             if archive is not None:
                 seq = db.execute(
                     "SELECT COALESCE(MAX(turn_seq),0)+1 FROM protocol_turns WHERE conversation_id=?",

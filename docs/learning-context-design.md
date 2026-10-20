@@ -1,6 +1,6 @@
 # 学习状态与上下文管理设计
 
-状态：三个阶段已实现。设计日期2026-10-19；更新时间2026-10-20 04:56（Asia/Shanghai，UTC+08:00）。设计代码基线为`a3c5e02`；下文“现状”表保留设计时状态，当前行为与验收以[上下文管理说明](context-management.md)、[学习状态与摘要说明](learning-state-summary.md)、[学习记忆说明](learning-memory.md)及实际代码为准。
+状态：三个阶段已实现。设计日期2026-10-19；更新时间2026-10-20 12:15（Asia/Shanghai，UTC+08:00）。设计代码基线为`a3c5e02`；下文“现状”表保留设计时状态，当前行为与验收以[上下文管理说明](context-management.md)、[学习状态与摘要说明](learning-state-summary.md)、[学习记忆说明](learning-memory.md)及实际代码为准。
 
 ## 1. 解决的用户问题
 
@@ -156,7 +156,7 @@ MemoryStore.recall(space_id, selected_topic_id, query, budget) -> list[MemoryIte
 | `learning_memories`（新增） | 空间/主题范围、类型、值、来源、版本与状态，包括遗忘排除标记 |
 | `context_snapshots`（新增） | 每次调用选中的组/记忆/摘要版本、移除原因、预算估算、图片数与实际usage；避免重复存正文 |
 
-使用schema版本迁移，现有`messages`、反馈和笔记不删。新回合在`finish_run`中原子归档；运行中仍使用内存协议与现有事件日志。上下文快照是诊断记录，**不是可恢复执行检查点**，不能解决API进程被杀后的问答恢复。
+使用schema版本迁移，现有`messages`、反馈和笔记不删。新回合在`finish_run`中原子归档；本模块设计时运行中使用内存协议与现有事件日志，现已由[Agent Runtime](agent-runtime.md)另存执行检查点。上下文快照是诊断记录，**不是可恢复执行检查点**，不能解决API进程被杀后的问答恢复。
 
 旧`conversations.protocol`可能把工作记录拼进用户内容，也有模拟用户角色的图片消息。不得靠`role=user`机械分回合。迁移时先保留完整旧协议为legacy档案；能无歧义识别的完整组建立索引，识别不了的部分整体保留，不伪造丢失的中间协议。首次需要压缩时，以可验证的`messages`、反馈、笔记和工具事件生成注明局限的旧会话摘要；原生不透明项目不能跨模型强行重建。迁移不要求用户新建会话，也不以摘要覆盖原档案。
 
@@ -190,4 +190,4 @@ MemoryStore.recall(space_id, selected_topic_id, query, budget) -> list[MemoryIte
 
 ## 9. 后续扩展边界
 
-后续问答持久化执行应复用这些档案ID和状态版本，但另行保存步骤、外部调用结果与恢复策略；多用户部署还需身份、权限、租户隔离及记忆删除策略。二者不塞进本轮模块，也不因为有数据库就宣称已经具备。
+[Agent Runtime](agent-runtime.md)已复用这些档案ID和状态版本，另行保存步骤、外部调用结果与恢复策略；多用户部署还需身份、权限、租户隔离及记忆删除策略。二者不塞进本轮模块，也不因为有数据库就宣称已经具备。

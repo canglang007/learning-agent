@@ -1,4 +1,4 @@
-"""Durable RT1 submission, control, and public progress; no mid-run replay yet."""
+"""Durable submission, lifecycle control, and public progress snapshots."""
 
 import json
 from datetime import UTC, datetime
@@ -255,6 +255,7 @@ class RunStore:
                 "UPDATE run_operations SET state='unknown',updated_at=? WHERE run_id=? AND state='sending'",
                 (now(), run_id),
             )
+            self.revoke_draft_in(db, run_id, reason)
             self.event_in(db, run_id, "run.interrupted", {"reason": reason})
 
     def recover_runs(self, settings=None):
@@ -303,6 +304,7 @@ class RunStore:
             if row["state"] in TERMINAL or row["state"] == "cancelling":
                 return
             if row["state"] == "running":
+                self.revoke_draft_in(db, run_id, "cancel_requested")
                 db.execute(
                     "UPDATE runs SET state='cancelling',cancel_requested=1,state_revision=state_revision+1,phase='cancelling',updated_at=? WHERE id=?",
                     (now(), run_id),
@@ -313,6 +315,7 @@ class RunStore:
 
     def _seal_stopped(self, db, row, state, content):
         cid, rid = row["conversation_id"], row["id"]
+        self.revoke_draft_in(db, rid, state)
         db.execute(
             "UPDATE runs SET state=?,owner_token=NULL,cancel_requested=?,state_revision=state_revision+1,phase=?,error=?,updated_at=? WHERE id=?",
             (state, int(state == "cancelled"), state, content, now(), rid),
@@ -367,6 +370,9 @@ class RunStore:
             answer = db.execute(
                 "SELECT content,kind FROM messages WHERE run_id=? AND role='assistant'", (run_id,)
             ).fetchone()
+            draft = self.public_draft(
+                db.execute("SELECT * FROM run_drafts WHERE run_id=?", (run_id,)).fetchone()
+            )
         result = {
             k: row[k]
             for k in (
@@ -387,6 +393,7 @@ class RunStore:
             last_event_seq=seq,
             events=json.loads(row["events"]),
             answer=answer[0] if answer else None,
+            draft=draft,
             allowed_actions=["cancel"]
             if row["state"] in {"queued", "running", "interrupted"}
             else [],

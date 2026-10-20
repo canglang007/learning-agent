@@ -224,6 +224,104 @@ class OpenAIProvider:
             error.usage = data.get("usage") if isinstance(data, dict) else None
             raise
 
+    async def send_stream(self, request, on_snapshot):
+        """One HTTP request, including gateways returning JSON despite stream=true."""
+        from learning_agent.streaming import InvalidStream, StreamAssembly, final_projection
+
+        settings = self.settings
+        if not request.encoded:
+            raise ModelError("内部请求尚未完成图像编码，未发送模型请求。")
+        payload = {**request.payload, "stream": True}
+        if settings.protocol == "chat_completions":
+            payload["stream_options"] = {"include_usage": True}
+        body = wire_bytes(payload)
+        if len(body) > settings.context_max_request_bytes:
+            raise ModelError("模型请求体积过大，请缩小资料片段。")
+        assembly = StreamAssembly(settings.protocol)
+        mode = "sse"
+        try:
+            async with httpx.AsyncClient(
+                transport=self.transport, timeout=settings.timeout_seconds
+            ) as client, client.stream(
+                "POST",
+                settings.base_url.rstrip("/") + request.endpoint,
+                headers={
+                    "Authorization": "Bearer " + settings.api_key.get_secret_value(),
+                    "Content-Type": "application/json",
+                },
+                content=body,
+            ) as response:
+                response.raise_for_status()
+                if "application/json" in response.headers.get("content-type", ""):
+                    mode = "json_fallback"
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > 16 * 1024**2:
+                            raise InvalidStream()
+                    data = json.loads(raw)
+                elif "text/event-stream" in response.headers.get("content-type", ""):
+                    lines, size = [], 0
+
+                    def accept():
+                        if not lines:
+                            return
+                        event = "\n".join(lines)
+                        lines.clear()
+                        if event == "[DONE]":
+                            if settings.protocol != "chat_completions":
+                                raise InvalidStream()
+                            assembly.done = True
+                            return
+                        if assembly.done:
+                            raise InvalidStream()
+                        assembly.feed(json.loads(event))
+                        on_snapshot(assembly.projection(), mode)
+
+                    async for line in response.aiter_lines():
+                        size += len(line.encode("utf-8"))
+                        if size > 16 * 1024**2:
+                            raise InvalidStream()
+                        if not line:
+                            accept()
+                            if assembly.done:
+                                break
+                        elif line.startswith("data:"):
+                            lines.append(line[5:].removeprefix(" "))
+                    accept()
+                    if not assembly.done:
+                        raise ModelError(
+                            "模型流式连接提前结束，远端结果未知；不会自动重发。",
+                            outcome="unknown",
+                        )
+                    data = assembly.result()
+                else:
+                    raise InvalidStream()
+            try:
+                message, usage = self.parse_response(data)
+            except ModelError as error:
+                error.outcome = "returned_invalid"
+                error.usage = data.get("usage") if isinstance(data, dict) else None
+                raise
+            projected = final_projection(message)
+            # A completed response is authoritative, including Responses' native opaque items.
+            on_snapshot(projected, mode, True)
+            return message, usage
+        except httpx.HTTPStatusError as error:
+            raise ModelError(
+                f"流式请求返回 HTTP {error.response.status_code}，请检查网关支持；可关闭 LA_STREAM_ANSWER 后重新提问，本轮未自动重发。"
+            ) from None
+        except httpx.RequestError:
+            raise ModelError(
+                "模型流式连接失败或超时，远端结果未知；不会自动重发。", outcome="unknown"
+            ) from None
+        except (InvalidStream, ValueError, KeyError, TypeError, AttributeError, IndexError):
+            error = ModelError(
+                "模型流式响应不完整或不符合协议，草稿未交付。", outcome="returned_invalid"
+            )
+            error.usage = assembly.usage or None
+            raise error from None
+
     def parse_response(self, data):
         settings = self.settings
         try:
