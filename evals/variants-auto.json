@@ -1,0 +1,8 @@
+{
+  "agent": {
+    "route_policy": "agent"
+  },
+  "auto": {
+    "route_policy": "auto"
+  }
+}

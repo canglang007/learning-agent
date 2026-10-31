@@ -22,6 +22,7 @@ from learning_agent.learning import (
 )
 from learning_agent.provider import ModelError, OpenAIProvider, asset_info
 from learning_agent.retrieval import Retriever
+from learning_agent.routing import choose_route, evidence_from_hits, format_retrieval
 from learning_agent.run_store import SUCCESS, RunStopped
 from learning_agent.summaries import maybe_summarize
 from learning_agent.tools import MaterialTools, RecallArgs, definitions
@@ -158,8 +159,34 @@ async def run_turn(
                 set(saved["prepared"]["assets"]),
             )
         prior_turns = [t for t in prior_turns if t["turn_seq"] <= saved["prior_end"]]
+    route, route_reason = choose_route(
+        question,
+        focus=focus,
+        feedback=feedback,
+        policy=getattr(settings, "route_policy", "agent"),
+    )
+    if saved and saved.get("route"):
+        route = saved["route"]
+        route_reason = saved.get("route_reason", route_reason)
+    retrieval_context, retrieval_evidence = "", []
+    if route == "fixed_rag":
+        try:
+            search = await asyncio.to_thread(
+                (retriever or Retriever(store, settings)).search,
+                conversation["space_id"],
+                question,
+            )
+            hits = search.get("hits", [])
+            retrieval_context = format_retrieval(hits)
+            retrieval_evidence = evidence_from_hits(hits)
+        except Exception as error:  # noqa: BLE001 - fall back to the full Agent path
+            route, route_reason = "agent", f"retrieval_failed:{type(error).__name__}"
     if control:
         images_used = max(images_used, store.image_usage(run_id))
+        control.emit("route.selected", {"route": route, "reason": route_reason})
+    else:
+        events.append({"type": "route", "route": route, "reason": route_reason})
+        store.save_events(run_id, events)
 
     def persist(
         next_phase,
@@ -175,6 +202,8 @@ async def run_turn(
         payload = {
             "version": 2,
             "phase": next_phase,
+            "route": route,
+            "route_reason": route_reason,
             "index": index if next_index is None else next_index,
             "call_index": call_index if next_call is None else next_call,
             "groups": [g.dump() for g in groups],
@@ -224,30 +253,42 @@ async def run_turn(
         if phase != "ready_to_commit":
             async with asyncio.timeout(settings.timeout_seconds * 2):
                 start_index = index
-                for index in range(start_index, settings.max_steps):
+                step_limit = 1 if route != "agent" else settings.max_steps
+                for index in range(start_index, step_limit):
                     if control:
                         control.check()
                     context_step, snapshot_saved = index + 1, phase != "prepare"
                     if phase == "prepare":
-                        allow = (
-                            control.store.operation_count(run_id, "main_model")
-                            if control
-                            else index
-                        ) < settings.max_steps - 1 and (
-                            control.store.operation_count(run_id, "tool") if control else calls_used
-                        ) < 12
-                        instructions = (
-                            INSTRUCTIONS
-                            + "\n"
-                            + LEARNING_GUIDANCE
-                            + f"\n本轮剩余图像预算：{settings.max_images_per_turn - images_used}张；PDF和视频共享。视频frame_count可选1到3，按问题需要选择并为其他图像留预算。"
-                            + (
-                                "\n预算已用完，请根据现有信息交付，并说明未完成部分。"
-                                if not allow
-                                else ""
+                        if route == "agent":
+                            allow = (
+                                control.store.operation_count(run_id, "main_model")
+                                if control
+                                else index
+                            ) < settings.max_steps - 1 and (
+                                control.store.operation_count(run_id, "tool") if control else calls_used
+                            ) < 12
+                            instructions = (
+                                INSTRUCTIONS
+                                + "\n"
+                                + LEARNING_GUIDANCE
+                                + f"\n本轮剩余图像预算：{settings.max_images_per_turn - images_used}张；PDF和视频共享。视频frame_count可选1到3，按问题需要选择并为其他图像留预算。"
+                                + (
+                                    "\n预算已用完，请根据现有信息交付，并说明未完成部分。"
+                                    if not allow
+                                    else ""
+                                )
                             )
-                        )
-                        tool_definitions = definitions(settings.enable_vision)
+                            tool_definitions = definitions(settings.enable_vision)
+                        else:
+                            allow = True
+                            tool_definitions = []
+                            mode_note = (
+                                "\n本轮执行模式：直接回答。不要调用工具；如资料不足，明确说明。"
+                                if route == "direct"
+                                else "\n本轮执行模式：基于提供的检索片段回答。不要调用工具；片段不足时明确说明。\n\n"
+                                + retrieval_context
+                            )
+                            instructions = INSTRUCTIONS + "\n" + LEARNING_GUIDANCE + mode_note
                         prepared = manager.prepare(
                             prior_turns,
                             groups,
@@ -257,7 +298,7 @@ async def run_turn(
                             allow,
                             summary,
                         )
-                        if not summary_attempted:
+                        if route == "agent" and not summary_attempted:
                             summary, summary_event = await maybe_summarize(
                                 store,
                                 provider,
@@ -283,6 +324,8 @@ async def run_turn(
                                     allow,
                                     summary,
                                 )
+                        prepared.snapshot["route"] = route
+                        prepared.snapshot["retrieval_evidence"] = retrieval_evidence
                         prepared.snapshot["memory"] = {
                             "enabled": memories["enabled"],
                             "settings_revision": memories["settings_revision"],
@@ -381,6 +424,8 @@ async def run_turn(
                     group = groups[-1]
                     message = group.messages[0]
                     calls = message.get("tool_calls", [])
+                    if route != "agent" and calls:
+                        raise ModelError("自动路由的简单模式不支持工具调用。")
                     if not calls:
                         content = message.get("content", "").strip()
                         if not content:
@@ -780,6 +825,7 @@ async def run_turn(
         execution_guard=control.final_guard if control and frozen.get("execution") else None,
         archive={
             "profile": manager.profile,
+            "route": {"name": route, "reason": route_reason},
             "input": {
                 "question": question,
                 "focus": focus,

@@ -22,6 +22,7 @@ from learning_agent.store import Store
 ALLOWED = {
     "model",
     "protocol",
+    "route_policy",
     "retrieval_mode",
     "embedding_provider",
     "embedding_model",
@@ -347,6 +348,7 @@ async def run_experiment(
         )
         profile = {
             "model": profile_id(config),
+            "route_policy": config.route_policy,
             "retrieval_mode": config.retrieval_mode,
             "embedding_provider": config.embedding_provider,
             "embedding_model": config.embedding_model,

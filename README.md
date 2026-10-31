@@ -10,6 +10,7 @@ Learning Agent 面向在长课程、讲义和个人资料里自学的场景。�
 
 - **多模态资料**：文字、PDF、音频、视频；PDF 支持物理页码和区域查看，视频支持字幕与抽样画面。
 - **Agent 自主工具调用**：模型根据问题和工具观察选择解释、澄清、搜索、补读、看页或看帧，而不是固定检索后生成。
+- **可选自动路由**：简单问题走直答或固定检索，涉及页面、图表、视频、反馈或选中位置时回到完整 Agent，保留同一套 Runtime 与记录。
 - **连续学习**：保存当前目标、卡点、讲解尝试和用户反馈；支持主题接续与可管理的跨会话记忆。
 - **可恢复执行**：问题提交后后台执行，网页显示真实进度；刷新、断线或进程重启后按检查点恢复，可取消，可查看草稿。
 - **本地检索**：中文二元词与英文词 BM25，可选本地/兼容向量服务，使用 RRF 融合；向量不可用时明确退回 BM25。
@@ -119,6 +120,7 @@ uv run python -m learning_agent.worker
 | `LA_MODEL` | `gpt-6.1-sol` | 模型 ID |
 | `LA_API_KEY` | 空 | 模型服务密钥；不要提交到仓库 |
 | `LA_PROTOCOL` | `chat_completions` | `chat_completions` 或 `responses` |
+| `LA_ROUTE_POLICY` | `agent` | `agent` 始终走完整 Agent；`auto` 启用自动直答/固定检索 |
 | `LA_DATA_ROOT` | `./data` | 资料、数据库和产物目录 |
 | `LA_STREAM_ANSWER` | `false` | 是否显示正文草稿流（进度 SSE 不受影响） |
 | `LA_ASR_PROVIDER` | `disabled` | `local` / `compatible` / `disabled` |
@@ -181,6 +183,7 @@ notes/              自用设计、复盘与演示材料（不提交）
 | [长课程导入与后台任务](docs/long-course-design.md) | 分块上传、回放、ASR 与恢复 |
 | [长课程检索](docs/course-retrieval.md) | 分段、BM25/向量融合与验收结果 |
 | [统一评测](docs/evaluation.md) | Dataset、评分、基线对比与结果表 |
+| [自动路由](docs/routing.md) | 直答、固定检索与 Agent 的选择规则 |
 | [演示流程](docs/demo-demo.md) | 5–8 分钟真实学习流程与证据入口 |
 
 ## 隐私与数据

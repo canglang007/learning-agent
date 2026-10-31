@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     model: str = "gpt-6.1-sol"
     api_key: SecretStr = SecretStr("")
     protocol: Literal["chat_completions", "responses"] = "chat_completions"
+    route_policy: Literal["agent", "auto"] = "agent"
     data_root: Path = Path("data")
     timeout_seconds: float = Field(default=90, gt=0)
     max_steps: int = Field(default=8, ge=1, le=20)

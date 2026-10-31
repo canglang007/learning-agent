@@ -45,6 +45,7 @@ def input_manifest(prepared, step):
         if not observation.get("error"):
             evidence.append(entry)
     snapshot = prepared.snapshot
+    evidence.extend(snapshot.get("retrieval_evidence", []))
     return {
         "schema_version": 1,
         "step": step,
