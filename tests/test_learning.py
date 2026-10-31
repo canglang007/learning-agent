@@ -202,7 +202,7 @@ def test_provider_roundtrip_replays_tools_and_usage(protocol):
         assert final["content"] == "解释" and usage["total_tokens"] == 7
 
     asyncio.run(exercise())
-    assert requests[1]["tool_choice"] == "none"
+    assert "tools" not in requests[1] and "tool_choice" not in requests[1]
     if protocol == "responses":
         assert requests[1]["store"] is False
         assert requests[1]["input"][-1]["type"] == "function_call_output"

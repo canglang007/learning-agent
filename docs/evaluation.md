@@ -1,6 +1,6 @@
 # 统一评测与失败分析
 
-更新于：2026-10-20 14:59（Asia/Shanghai，UTC+08:00）。E1/E2/E3的本地首版已实现；[设计](evaluation-analysis-design.md)保留完整方案，本文说明实际接口与验收边界。
+更新于：2026-10-31 23:12:21（Asia/Shanghai，UTC+08:00）。E1/E2/E3的本地首版已实现；[设计](evaluation-analysis-design.md)保留完整方案，本文说明实际接口与验收边界。
 
 ## 当前可用
 
@@ -13,6 +13,50 @@
 - 三类旧报告适配：课程多轮、检索组件、RT3。缺少的输入清单/复核来源标unknown，不补造成绩。
 
 教学质量按准确性、回应卡点、清晰度、反馈适应0–3分逐项解释；重大错误另列。条件判定为pass/fail/needs_review，分数不代替用户掌握程度。工具更多、答案更长不加分。
+
+## 基线与结果表
+
+新增两组不经过 Agent Runtime 的基线，用于回答“当前 Agent 比普通流程好在哪里”：
+
+| 配置 | 每回合行为 |
+| --- | --- |
+| `direct` | 不检索、不调用工具，直接调用一次模型 |
+| `fixed_rag` | 先检索前 5 段，拼进一次模型请求，不调用工具 |
+
+基线复用同一套任务、资料、模型配置和规则 grader；包含状态/记忆动作的 Case 标为 `not_applicable`，不参与对比。命令：
+
+```bash
+# 计划，不触网
+uv run python -m learning_agent.evaluation baseline \
+  --suite evals/learning-core-v1.json \
+  --assets data/demo/assets.local.json \
+  --output data/evaluations/baseline-v1 \
+  --variants direct fixed_rag --plan
+
+# 真实运行；会产生模型费用
+uv run python -m learning_agent.evaluation baseline \
+  --suite evals/learning-core-v1.json \
+  --assets data/demo/assets.local.json \
+  --output data/evaluations/baseline-v1 \
+  --variants direct fixed_rag --real --max-turns 12
+
+# 与 Agent 评测结果合并成一张表
+uv run python -m learning_agent.evaluation results \
+  --experiment data/evaluations/agent-v1 \
+  --baseline data/evaluations/baseline-v1 \
+  --output docs/evaluation-results.md
+```
+
+`results` 只统计两边都存在的回合，并输出：
+
+- 可评测回合、交付数；
+- 证据检查通过数/总数；
+- 工具调用数/失败数；
+- 主模型 Token 合计；
+- P50/P95 wall time；
+- 内容复核通过数/已复核数。未复核不当作通过，Token 也不是金额。
+
+基线输出 `baseline.json`、`baseline.md` 和 `baseline.db`；原始回答、trace 与数据库留在 `data/`，详细结果按 `docs/evaluation-results.md` 的边界解释。单次运行、开发复核不能替代独立人工评审或真人学习收益。
 
 ## 文件与运行
 

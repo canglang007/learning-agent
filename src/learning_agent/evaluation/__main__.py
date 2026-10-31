@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from learning_agent.config import Settings
+from learning_agent.evaluation.baselines import baseline_plan, build_results, run_baselines
 from learning_agent.evaluation.ledger import save_json
 from learning_agent.evaluation.report import compare, report
 from learning_agent.evaluation.review import judge, save_review
@@ -31,6 +32,21 @@ def main():
     mode = run.add_mutually_exclusive_group()
     mode.add_argument("--plan", action="store_true")
     mode.add_argument("--real", action="store_true")
+    baseline = sub.add_parser("baseline")
+    baseline.add_argument("--suite", type=Path, required=True)
+    baseline.add_argument("--assets", type=Path, required=True)
+    baseline.add_argument("--output", type=Path, required=True)
+    baseline.add_argument("--case", action="append", dest="cases")
+    baseline.add_argument("--split", choices=["dev", "holdout", "all"], default="dev")
+    baseline.add_argument("--variants", nargs="+", choices=["direct", "fixed_rag"], default=["direct", "fixed_rag"])
+    baseline.add_argument("--max-turns", type=int, default=12)
+    baseline_mode = baseline.add_mutually_exclusive_group()
+    baseline_mode.add_argument("--plan", action="store_true")
+    baseline_mode.add_argument("--real", action="store_true")
+    results = sub.add_parser("results")
+    results.add_argument("--experiment", type=Path, required=True)
+    results.add_argument("--baseline", type=Path, required=True)
+    results.add_argument("--output", type=Path, required=True)
     view = sub.add_parser("report")
     view.add_argument("experiment", type=Path)
     view.add_argument("--include-content", action="store_true")
@@ -105,6 +121,40 @@ def main():
                         continue_run=args.continue_run,
                     )
                 )
+        elif args.command == "baseline":
+            suite = Suite.model_validate_json(args.suite.read_text())
+            bindings = json.loads(args.assets.read_text())
+            baseline_trials = baseline_plan(suite, args.variants, args.cases, args.split)
+            if not args.real:
+                result = {
+                    "mode": "plan",
+                    "variants": args.variants,
+                    "cases": [item["case"].id for item in baseline_trials],
+                    "planned_turns": sum(len(item["case"].turns) for item in baseline_trials),
+                    "max_turns": args.max_turns,
+                    "network_calls": 0,
+                }
+            else:
+                if not Settings().api_key.get_secret_value():
+                    parser.error("请先在本机配置LA_API_KEY")
+                full = asyncio.run(
+                    run_baselines(
+                        args.output,
+                        suite,
+                        bindings,
+                        args.variants,
+                        cases=args.cases,
+                        split=args.split,
+                        max_turns=args.max_turns,
+                    )
+                )
+                result = {
+                    "summary": full["summary"],
+                    "recorded": len(full["rows"]),
+                    "output": str(args.output),
+                }
+        elif args.command == "results":
+            result = build_results(args.experiment, args.baseline, args.output)
         elif args.command == "report":
             result = report(args.experiment, include_content=args.include_content)
             if args.output:

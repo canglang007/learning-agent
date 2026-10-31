@@ -141,6 +141,8 @@ uv run ruff check .
 uv run python -m learning_agent.evaluation --help
 ```
 
+基线与结果表（无检索直答、固定 RAG 对比）见 [统一评测](docs/evaluation.md) 的“基线与结果表”。
+
 `examples/` 下提供了文字、PDF、媒体、长课程、检索、恢复、流式和记忆等验收脚本。真实模型调用会产生费用，运行前请阅读对应文档。
 
 ### 项目结构
@@ -178,7 +180,7 @@ notes/              自用设计、复盘与演示材料（不提交）
 | [学习主题与记忆](docs/learning-memory.md) | 主题接续、记忆范围与遗忘 |
 | [长课程导入与后台任务](docs/long-course-design.md) | 分块上传、回放、ASR 与恢复 |
 | [长课程检索](docs/course-retrieval.md) | 分段、BM25/向量融合与验收结果 |
-| [统一评测](docs/evaluation.md) | Dataset、评分、失败分析与对比 |
+| [统一评测](docs/evaluation.md) | Dataset、评分、基线对比与结果表 |
 | [演示流程](docs/demo-demo.md) | 5–8 分钟真实学习流程与证据入口 |
 
 ## 隐私与数据

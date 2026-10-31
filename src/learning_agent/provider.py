@@ -99,9 +99,10 @@ class OpenAIProvider:
             payload = {
                 **common,
                 "messages": [{"role": "system", "content": instructions}, *messages],
-                "tools": [{"type": "function", "function": tool} for tool in tools],
-                "tool_choice": "auto" if allow_tools else "none",
             }
+            if tools:
+                payload["tools"] = [{"type": "function", "function": tool} for tool in tools]
+                payload["tool_choice"] = "auto" if allow_tools else "none"
             endpoint = "/chat/completions"
         else:
             items = []
@@ -131,9 +132,10 @@ class OpenAIProvider:
                 "input": items,
                 "store": False,
                 "include": ["reasoning.encrypted_content"],
-                "tools": [{"type": "function", **tool} for tool in tools],
-                "tool_choice": "auto" if allow_tools else "none",
             }
+            if tools:
+                payload["tools"] = [{"type": "function", **tool} for tool in tools]
+                payload["tool_choice"] = "auto" if allow_tools else "none"
             endpoint = "/responses"
         if settings.output_token_field != "none":
             payload[settings.output_token_field] = settings.context_output_reserve_tokens
