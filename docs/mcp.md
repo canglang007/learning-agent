@@ -1,6 +1,6 @@
 # MCP 只读服务器
 
-更新于：2026-11-01 00:40:00（Asia/Shanghai，UTC+08:00）。
+更新于：2026-11-01 00:33:05（Asia/Shanghai，UTC+08:00）。
 
 Learning Agent 提供一个可选的 MCP（Model Context Protocol）stdio 服务器，把本地资料目录暴露给兼容的 MCP 客户端。它是**只读适配层**，不是新的执行引擎：不调用模型、不上传、不修改资料、不改学习状态。
 
@@ -57,6 +57,26 @@ LA_MCP_SPACE=
 - `search_materials` 只读取已存在的 `chunks`，不建立索引、不调用向量服务；没有分段时明确返回空结果和原因。
 - 所有资料 ID 都经过空间归属校验，不接受任意文件路径。
 - MCP 客户端看到的是本地资料适配层；网页仍是完整交互入口。
+
+## 本机演示
+
+使用本机 `data/acceptance/optimization.pdf`（119 页）建立独立演示空间，分段由网页/评测准备，MCP 本身不写索引：
+
+```text
+list_materials
+  -> optimization.pdf, PDF, 119 pages
+
+search_materials("learning rate")
+  -> 5 hits, bm25_read_only
+  -> 第一名：optimization.pdf 物理第 77 页，
+     "Learning rate schedules ..."
+
+read_page(material_id, 77)
+  -> has_text: true, total_lines: 4
+```
+
+中文查询英文 PDF 可能不命中，因为 MCP 只做 BM25 词法检索；请用文档语言查询，或先在网页准备多语言向量。MCP 不代替网页的视觉/向量能力。
+
 
 ## 为什么要单独做 MCP
 

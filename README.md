@@ -152,7 +152,7 @@ uv sync --extra mcp
 uv run learning-agent-mcp --data-root ./data --space <space_id>
 ```
 
-服务器通过 stdio 暴露三个只读工具：`list_materials`、`search_materials`、`read_page`。它不调用模型、不上传、不修改资料；搜索只读取已有分段，PDF 只返回提取文字。完整配置和边界见 [MCP 只读服务器](docs/mcp.md)。
+服务器通过 stdio 暴露三个只读工具：`list_materials`、`search_materials`、`read_page`。它不调用模型、不上传、不修改资料；搜索只读取已有分段，PDF 只返回提取文字。完整配置、真实 PDF 演示和边界见 [MCP 只读服务器](docs/mcp.md)。
 
 `examples/` 下提供了文字、PDF、媒体、长课程、检索、恢复、流式和记忆等验收脚本。真实模型调用会产生费用，运行前请阅读对应文档。
 
