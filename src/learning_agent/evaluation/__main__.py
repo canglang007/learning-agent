@@ -45,7 +45,7 @@ def main():
     baseline_mode.add_argument("--real", action="store_true")
     results = sub.add_parser("results")
     results.add_argument("--experiment", type=Path, required=True)
-    results.add_argument("--baseline", type=Path, required=True)
+    results.add_argument("--baseline", type=Path)
     results.add_argument("--output", type=Path, required=True)
     view = sub.add_parser("report")
     view.add_argument("experiment", type=Path)

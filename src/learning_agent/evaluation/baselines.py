@@ -505,14 +505,16 @@ async def run_baselines(
     return result
 
 
-def build_results(experiment: Path, baseline: Path, output: Path) -> dict[str, Any]:
+def build_results(experiment: Path, baseline: Path | None, output: Path) -> dict[str, Any]:
     from learning_agent.evaluation.report import report
 
     agent = report(Path(experiment), include_content=True)
-    baseline_data = json.loads((Path(baseline) / "baseline.json").read_text())
-    baseline_rows = [
-        row for row in baseline_data["rows"] if row["status"] != "not_applicable"
-    ]
+    baseline_rows: list[dict[str, Any]] = []
+    if baseline is not None:
+        baseline_data = json.loads((Path(baseline) / "baseline.json").read_text())
+        baseline_rows = [
+            row for row in baseline_data["rows"] if row["status"] != "not_applicable"
+        ]
     agent_variants = {row["variant"] for row in agent["rows"]}
     agent_rows = [
         {
@@ -523,18 +525,18 @@ def build_results(experiment: Path, baseline: Path, output: Path) -> dict[str, A
         }
         for row in agent["rows"]
     ]
-    keys = {
-        (row["case_id"], row["turn_id"])
-        for row in baseline_rows
-    } & {
-        (row["case_id"], row["turn_id"])
-        for row in agent_rows
-    }
-    rows = [
-        row
-        for row in [*baseline_rows, *agent_rows]
-        if (row["case_id"], row["turn_id"]) in keys
-    ]
+    agent_keys = {(row["case_id"], row["turn_id"]) for row in agent_rows}
+    if baseline_rows:
+        baseline_keys = {(row["case_id"], row["turn_id"]) for row in baseline_rows}
+        keys = baseline_keys & agent_keys
+        rows = [
+            row
+            for row in [*baseline_rows, *agent_rows]
+            if (row["case_id"], row["turn_id"]) in keys
+        ]
+    else:
+        keys = agent_keys
+        rows = agent_rows
     summary = summarize_rows(rows)
     labels = {
         "direct": LABELS["direct"],
@@ -545,13 +547,17 @@ def build_results(experiment: Path, baseline: Path, output: Path) -> dict[str, A
             if name not in {"direct", "fixed_rag"}
         },
     }
+    if baseline_rows:
+        note = "只比较两边都存在的回合；内容复核未完成的回合不当作通过；Token 不是金额。"
+    else:
+        note = "比较同一 Agent 实验内的配置变体；内容复核未完成的回合不当作通过；Token 不是金额。"
     result = {
         "schema_version": 1,
         "experiment": str(Path(experiment)),
-        "baseline": str(Path(baseline)),
+        "baseline": str(Path(baseline)) if baseline is not None else None,
         "shared_turns": len(keys),
         "summary": summary,
-        "note": "只比较两边都存在的回合；内容复核未完成的回合不当作通过；Token 不是金额。",
+        "note": note,
     }
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -561,7 +567,7 @@ def build_results(experiment: Path, baseline: Path, output: Path) -> dict[str, A
         f"更新时间：{now()}（UTC）。\n\n"
         + markdown_table(summary, labels)
         + "\n\n"
-        "说明：只统计两边都存在的回合；完成指 completed 或 budget_exhausted；"
-        "证据检查来自规则，不支持关系仍需内容复核；Token 为主模型 usage 合计，未换算金额。\n"
+        + note
+        + "\n",
     )
     return result

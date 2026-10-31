@@ -174,3 +174,7 @@ def test_results_merges_agent_and_baselines_on_shared_turns(tmp_path):
     assert {"direct", "fixed_rag", "learning-agent"} <= set(result["summary"])
     assert "评测结果" in output.read_text()
 
+    variants = build_results(tmp_path / "agent", None, tmp_path / "variants.md")
+    assert variants["baseline"] is None
+    assert "learning-agent" in variants["summary"]
+

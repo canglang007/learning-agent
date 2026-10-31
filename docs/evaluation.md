@@ -44,7 +44,7 @@ uv run python -m learning_agent.evaluation baseline \
 uv run python -m learning_agent.evaluation results \
   --experiment data/evaluations/agent-v1 \
   --baseline data/evaluations/baseline-v1 \
-  --output docs/evaluation-results.md
+  --output data/evaluations/agent-v1/results.md
 ```
 
 `--max-turns` 对每个基线配置分别计数；Agent 评测的回合上限仍按原计划总计。
