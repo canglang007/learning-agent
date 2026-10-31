@@ -431,18 +431,19 @@ def test_responses_native_items_survive_returned_boundary_and_never_enter_progre
 
 
 @pytest.mark.parametrize(
-    "http_status,body,expected",
+    "http_status,body,expected,expected_requests",
     [
         (
             200,
             {"choices": [{"message": {"content": 42}}], "usage": {"total_tokens": 7}},
             "returned_invalid",
+            1,
         ),
-        (503, {"error": "private upstream body"}, "failed"),
+        (503, {"error": "private upstream body"}, "failed", 2),
     ],
 )
 def test_known_provider_failure_is_not_misclassified_as_unknown_retry(
-    tmp_path, http_status, body, expected
+    tmp_path, http_status, body, expected, expected_requests
 ):
     import httpx
     from pydantic import SecretStr
@@ -467,7 +468,7 @@ def test_known_provider_failure_is_not_misclassified_as_unknown_retry(
         ).json()["run_id"]
         store = client.app.state.store
         eventually(lambda: store.run(rid)["state"] == "failed")
-        assert len(sent) == 1 and store.public_run(rid)["allowed_actions"] == []
+        assert len(sent) == expected_requests and store.public_run(rid)["allowed_actions"] == []
         with store.connect() as db:
             row = db.execute(
                 "SELECT state,result,usage_status FROM run_operations WHERE run_id=?", (rid,)

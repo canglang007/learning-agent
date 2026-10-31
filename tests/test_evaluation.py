@@ -299,8 +299,8 @@ def test_core_suite_and_hidden_key_configuration(tmp_path, capsys):
     from learning_agent.launch import doctor, write_config
 
     core = Suite.model_validate_json(Path("evals/learning-core-v1.json").read_text())
-    assert len(core.cases) == 24 and sum(len(c.turns) for c in core.cases) == 48
-    assert sum(c.split == "holdout" for c in core.cases) == 8
+    assert len(core.cases) == 28 and sum(len(c.turns) for c in core.cases) == 56
+    assert sum(c.split == "holdout" for c in core.cases) == 10
     config = tmp_path / ".env"
     config.write_text("LA_MAX_STEPS=4\n")
     write_config(config, {"LA_API_KEY": "test-key-never-print", "LA_MODEL": "example-model"})
