@@ -106,6 +106,25 @@ def test_baseline_plan_rejects_unknown_mode():
         raise AssertionError("unknown baseline should fail")
 
 
+def test_baseline_turn_limit_is_per_variant(tmp_path):
+    note = tmp_path / "notes.md"
+    note.write_text("近似需要明确误差条件。")
+    model = PlainModel(["直答", "固定 RAG"])
+    result = asyncio.run(
+        run_baselines(
+            tmp_path / "baselines",
+            suite(),
+            {"notes": {"path": str(note)}},
+            ("direct", "fixed_rag"),
+            base=Settings(_env_file=None, data_root=tmp_path),
+            max_turns=1,
+            provider_factory=lambda _settings: model,
+        )
+    )
+    assert [row["status"] for row in result["rows"]] == ["completed", "completed"]
+    assert len(model.calls) == 2
+
+
 def test_provider_omits_empty_tools():
     settings = Settings(_env_file=None)
     request = OpenAIProvider(settings).build_request([], "回答", [], allow_tools=False)

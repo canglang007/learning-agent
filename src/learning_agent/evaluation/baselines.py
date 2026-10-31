@@ -390,7 +390,7 @@ async def run_baselines(
     provider = provider_factory(config) if provider_factory else OpenAIProvider(config)
 
     rows: list[dict[str, Any]] = []
-    calls = 0
+    calls_by_variant: dict[str, int] = {}
     for item in plan:
         variant, case = item["variant"], item["case"]
         reason = _not_applicable(case)
@@ -406,7 +406,7 @@ async def run_baselines(
             if blocked:
                 rows.append(_row(variant, case, turn, status="blocked", error="前序回合未完成"))
                 continue
-            if calls >= max_turns:
+            if calls_by_variant.get(variant, 0) >= max_turns:
                 rows.append(_row(variant, case, turn, status="stopped_budget", error="评测回合上限"))
                 continue
             history = histories.setdefault(turn.conversation, [])
@@ -449,7 +449,7 @@ async def run_baselines(
             except Exception as error:  # noqa: BLE001 - failed turn remains a row
                 error_text = f"{type(error).__name__}: {error}"
             elapsed = time.monotonic() - started
-            calls += 1
+            calls_by_variant[variant] = calls_by_variant.get(variant, 0) + 1
             run_id = f"baseline-{variant}-{case.id}-{turn.id}"
             trace = _trace(
                 run_id=run_id,

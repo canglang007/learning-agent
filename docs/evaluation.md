@@ -47,6 +47,8 @@ uv run python -m learning_agent.evaluation results \
   --output docs/evaluation-results.md
 ```
 
+`--max-turns` 对每个基线配置分别计数；Agent 评测的回合上限仍按原计划总计。
+
 `results` 只统计两边都存在的回合，并输出：
 
 - 可评测回合、交付数；
