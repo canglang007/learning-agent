@@ -163,6 +163,7 @@ async def run_turn(
         question,
         focus=focus,
         feedback=feedback,
+        followup=bool(prior_turns),
         policy=getattr(settings, "route_policy", "agent"),
     )
     if saved and saved.get("route"):

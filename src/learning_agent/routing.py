@@ -40,13 +40,14 @@ def choose_route(
     *,
     focus: dict[str, Any] | None = None,
     feedback: dict[str, Any] | None = None,
+    followup: bool = False,
     policy: str = "auto",
 ) -> tuple[Route, str]:
     """Choose an execution mode without spending an extra model call.
 
     The default is Agent whenever the request carries a selected position,
-    feedback, or an explicit visual/time reference.  This keeps the quality-first
-    behavior and only downgrades clear general or text-only material questions.
+    feedback, an earlier turn, or an explicit visual/time reference.  This keeps
+    the quality-first behavior and only downgrades clear standalone questions.
     """
     if policy != "auto":
         return "agent", "policy_agent"
@@ -54,6 +55,8 @@ def choose_route(
         return "agent", "focus_present"
     if feedback:
         return "agent", "feedback_present"
+    if followup:
+        return "agent", "followup_present"
     text = question.casefold()
     if _VISUAL_OR_TIME.search(text):
         return "agent", "explicit_visual_or_time"

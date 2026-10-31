@@ -50,6 +50,10 @@ def test_router_rules():
         "agent",
         "feedback_present",
     )
+    assert choose_route("0.17%与25.5%能相除吗？", followup=True) == (
+        "agent",
+        "followup_present",
+    )
     assert choose_route("解释这个概念", policy="agent") == ("agent", "policy_agent")
 
 
