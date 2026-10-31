@@ -145,6 +145,15 @@ uv run python -m learning_agent.evaluation --help
 
 基线与结果表（无检索直答、固定 RAG 对比）见 [统一评测](docs/evaluation.md) 的“基线与结果表”；本机试点结果见 [评测结果](docs/evaluation-results.md)。
 
+## MCP（可选）
+
+```bash
+uv sync --extra mcp
+uv run learning-agent-mcp --data-root ./data --space <space_id>
+```
+
+服务器通过 stdio 暴露三个只读工具：`list_materials`、`search_materials`、`read_page`。它不调用模型、不上传、不修改资料；搜索只读取已有分段，PDF 只返回提取文字。完整配置和边界见 [MCP 只读服务器](docs/mcp.md)。
+
 `examples/` 下提供了文字、PDF、媒体、长课程、检索、恢复、流式和记忆等验收脚本。真实模型调用会产生费用，运行前请阅读对应文档。
 
 ### 项目结构
@@ -184,6 +193,7 @@ notes/              自用设计、复盘与演示材料（不提交）
 | [长课程检索](docs/course-retrieval.md) | 分段、BM25/向量融合与验收结果 |
 | [统一评测](docs/evaluation.md) | Dataset、评分、基线对比与结果表 |
 | [评测结果](docs/evaluation-results.md) | 自动路由与多模态基线的本机试点 |
+| [MCP 只读服务器](docs/mcp.md) | 向外部 MCP 客户端暴露资料工具 |
 | [自动路由](docs/routing.md) | 直答、固定检索与 Agent 的选择规则 |
 | [演示流程](docs/demo-demo.md) | 5–8 分钟真实学习流程与证据入口 |
 
