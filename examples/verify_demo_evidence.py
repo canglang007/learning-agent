@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "browser_acceptance": ROOT / "data/demo/browser-acceptance.json",

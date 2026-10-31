@@ -16,9 +16,9 @@ from learning_agent.jobs import JobConflict, Jobs
 from learning_agent.learning import Feedback, FeedbackError, LearningConflict, UserStateEdit
 from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
 from learning_agent.memory import ContextSettings, MemoryCreate, MemoryEdit, TopicCreate
+from learning_agent.model_registry import status as model_status
 from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
-from learning_agent.model_registry import status as model_status
 from learning_agent.references import resolve_references
 from learning_agent.retrieval import Retriever
 from learning_agent.run_store import TERMINAL, RuntimeUnavailable
