@@ -228,6 +228,7 @@ notes/              自用设计、复盘与演示材料（不提交）
 | [统一评测](docs/evaluation.md) | Dataset、评分、基线对比与结果表 |
 | [评测结果](docs/evaluation-results.md) | 自动路由与多模态基线的本机试点 |
 | [MCP 只读服务器](docs/mcp.md) | 向外部 MCP 客户端暴露资料工具 |
+| [公开边界](docs/public-boundary.md) | 本机单用户、分享前检查与托管限制 |
 | [自动路由](docs/routing.md) | 直答、固定检索与 Agent 的选择规则 |
 | [演示流程](docs/demo-demo.md) | 5–8 分钟真实学习流程与证据入口 |
 
@@ -237,6 +238,10 @@ notes/              自用设计、复盘与演示材料（不提交）
 - 原始资料、SQLite、图片、字幕和评测产物都在 `data/`，已被 `.gitignore` 排除。
 - 自用设计、调试记录和演示材料在 `notes/`，同样不提交。
 - 提问时，选中的资料片段、字幕和图像会发送给你配置的模型服务；请按服务商的条款处理敏感资料。
+
+## 公开边界与许可
+
+本机单用户项目，不提供公网托管、账户鉴权或内置限流；不要把端口直接暴露到互联网。公开仓库前请运行 `uv run python scripts/check_public.py`，并阅读[公开边界](docs/public-boundary.md)。License: MIT。
 
 ## 当前边界
 

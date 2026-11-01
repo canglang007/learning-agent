@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: python scripts/check_public.py
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"

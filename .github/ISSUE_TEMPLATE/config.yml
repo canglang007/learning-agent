@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/canglang007/learning-agent/security/advisories/new
+    about: 请使用 private security advisory 报告密钥或安全问题
