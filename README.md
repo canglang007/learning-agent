@@ -230,6 +230,7 @@ notes/              自用设计、复盘与演示材料（不提交）
 | [MCP 只读服务器](docs/mcp.md) | 向外部 MCP 客户端暴露资料工具 |
 | [公开边界](docs/public-boundary.md) | 本机单用户、分享前检查与托管限制 |
 | [自动路由](docs/routing.md) | 直答、固定检索与 Agent 的选择规则 |
+| [3–5 分钟演示](docs/demo.md) | 合成数据上的完整操作路径 |
 | [演示流程](docs/demo-demo.md) | 5–8 分钟真实学习流程与证据入口 |
 
 ## 隐私与数据
