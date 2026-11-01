@@ -79,6 +79,7 @@ async function loadChat() {
   const messages=selectedConversation?await api(`/conversations/${selectedConversation}/messages`):[];
   if(selectedConversation!==conversation)return;
   $('chat').replaceChildren();
+  $('starter-questions').hidden=!selectedConversation||Boolean(messages.length);
   if(!messages.length)$('chat').innerHTML='<p>创建会话后提出困惑。你可以直接追问，不必按固定学习流程操作。</p>';
   for(const m of messages) {
     const article=document.createElement('article');article.innerHTML=`<small>${m.role==='user'?'你的问题':m.kind==='system'?'系统状态':'讲解'}</small><div class="body"></div>`;
@@ -174,6 +175,7 @@ function seek() {
 }
 $('spaces').onchange=guarded(async()=>{space=$('spaces').value;await loadSpace(true);});
 $('conversations').onchange=guarded(async()=>{clearFeedback();conversation=$('conversations').value;await loadChat();});
+$('starter-questions').onclick=e=>{const text=e.target.dataset.starter;if(!text)return;$('question').value=text;$('question').focus();};
 $('space-form').onsubmit=guarded(async e=>{e.preventDefault();const item=await post('/spaces',$('space-name').value);localStorage.setItem('learning-space',item.id);await loadSpaces();notice('资料空间已创建');});
 $('upload-form').onsubmit=guarded(async e=>{
   e.preventDefault();if(!space)throw Error('请先创建资料空间');

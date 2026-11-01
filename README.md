@@ -85,6 +85,18 @@ LA_PROTOCOL=chat_completions
 
 没有 API key 时不会调用模型，但仍可浏览已有资料和对话。模型调用会产生费用，是否计费取决于你配置的服务。
 
+### 使用自包含演示数据
+
+想先看界面和交互，可以生成一个不依赖私有课程文件的演示工作区：
+
+```bash
+uv sync --extra dev
+uv run python examples/prepare_demo.py --output data/demo-public
+./start.sh --data-root data/demo-public
+```
+
+脚本生成合成笔记、合成 PDF 和一条固定示例会话，不调用模型；示例回答会明确标注为演示数据。新提问仍需要配置模型。
+
 ### 手动启动（开发）
 
 API 和 worker 也可以分别运行，便于调试：
