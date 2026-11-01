@@ -1,6 +1,6 @@
 # 评测结果（本机试点）
 
-更新于：2026-11-01 00:24:57（Asia/Shanghai，UTC+08:00）。
+更新于：2026-11-01 14:13:54（Asia/Shanghai，UTC+08:00）。
 
 这些是本地单次试点，不是基准测试，也不是教学效果研究。内容复核由开发 Agent 按固定 rubric 完成，不是独立人工评审；Token 是主模型 usage 合计，没有价格表，不换算金额。原始数据、回答和数据库在忽略的 `data/evaluations/`，不随仓库分发。
 
@@ -83,5 +83,7 @@ uv run python -m learning_agent.evaluation results \
 ```
 
 真实运行会产生模型费用；`data/demo/assets.local.json` 和课程资料只保留在本机。结果表只统计两边都存在的回合；内容复核未完成的回合不当作通过。
+
+当前工程回归为 173 项通过、2 项按条件跳过；CI 同时运行公开检查、pytest、ruff 和 Docker build。
 
 相关设计与边界见[自动路由](routing.md)和[统一评测](evaluation.md)。

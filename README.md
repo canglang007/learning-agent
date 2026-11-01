@@ -171,6 +171,8 @@ uv run pytest -q
 uv run ruff check .
 ```
 
+CI 在每次 push / pull request 运行公开检查、pytest、ruff 和 Docker build。
+
 评测 CLI：
 
 ```bash
@@ -240,6 +242,13 @@ notes/              自用设计、复盘与演示材料（不提交）
 - 自用设计、调试记录和演示材料在 `notes/`，同样不提交。
 - 提问时，选中的资料片段、字幕和图像会发送给你配置的模型服务；请按服务商的条款处理敏感资料。
 
+## 当前状态
+
+- 工程回归：173 项通过、2 项按条件跳过；CI 运行公开检查、pytest、ruff 和 Docker build。
+- 本地 Docker build/run 与 Compose 配置已验证；GitHub Actions 绿色。
+- 已有自包含演示数据、自动路由、只读 MCP、基线结果表和 3–5 分钟演示脚本。
+- 未提供公网托管、账户鉴权或内置限流；外部用户研究尚未进行，不宣称教学收益。
+
 ## 公开边界与许可
 
 本机单用户项目，不提供公网托管、账户鉴权或内置限流；不要把端口直接暴露到互联网。公开仓库前请运行 `uv run python scripts/check_public.py`，并阅读[公开边界](docs/public-boundary.md)。License: MIT。
@@ -252,4 +261,4 @@ notes/              自用设计、复盘与演示材料（不提交）
 - 模型能力、协议和流式支持因服务商而异；Responses 与部分网关的组合仍以实际验证为准。
 - 评测覆盖工程路径和开发过程复核，不宣称真人学习收益或教学通过率。
 
-更新于：2026-10-31 18:48:31（Asia/Shanghai，UTC+08:00）
+更新于：2026-11-01 14:13:54（Asia/Shanghai，UTC+08:00）
