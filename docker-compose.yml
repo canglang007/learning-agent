@@ -1,0 +1,22 @@
+services:
+  api:
+    build: .
+    image: learning-agent:local
+    env_file: .env
+    environment:
+      LA_DATA_ROOT: /app/data
+    ports:
+      - "8320:8320"
+    volumes:
+      - ./data:/app/data
+
+  worker:
+    build: .
+    image: learning-agent:local
+    env_file: .env
+    environment:
+      LA_DATA_ROOT: /app/data
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - api

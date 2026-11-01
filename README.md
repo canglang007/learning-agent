@@ -113,6 +113,16 @@ uv run python -m learning_agent.worker
 
 两个进程必须使用同一个数据目录。只启动 API 时，后台回放、转写和索引任务会保留，网页会显示处理进程离线。
 
+### Docker（可选）
+
+```bash
+cp .env.example .env
+# 在 .env 填 LA_BASE_URL / LA_MODEL / LA_API_KEY / LA_PROTOCOL
+docker compose up --build
+```
+
+打开 <http://127.0.0.1:8320>。API 与 worker 共享 `./data`，`Ctrl-C` 结束；不需要在本机安装 Python 或 ffmpeg。Docker daemon 未启动时继续使用 `./start.sh`。
+
 ## 使用流程
 
 1. 新建资料空间，上传文字、PDF 或音视频。
