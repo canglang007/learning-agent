@@ -95,7 +95,20 @@ uv run python examples/prepare_demo.py --output data/demo-public
 ./start.sh --data-root data/demo-public
 ```
 
-脚本生成合成笔记、合成 PDF 和一条固定示例会话，不调用模型；示例回答会明确标注为演示数据。新提问仍需要配置模型。
+脚本生成合成笔记、合成 PDF 和一条固定示例会话，不调用模型；示例回答会明确标注为演示数据。新提问仍需要配置模型。这套离线演示只覆盖文字/PDF，不含视频。
+
+### 真实课程多模态演示
+
+想直接看 PDF 页面 + 视频字幕 + 抽样帧的真实流程，使用本机已有的课程素材：
+
+```bash
+uv run python examples/prepare_course_demo.py \
+  --output data/demo \
+  --workspace data/demo/workspace-multimodal
+./start.sh --data-root data/demo/workspace-multimodal --evaluation-root data/evaluations
+```
+
+演示使用真实 CS336 讲义第 10 页、198 秒课程视频和本地 ASR 字幕；素材只在本地，不随仓库分发。完整顺序、已验证运行和边界见[真实课程多模态演示](docs/demo.md)。没有课程素材时使用上面的离线演示，或在网页上传自己的 PDF/视频。
 
 ### 手动启动（开发）
 
@@ -232,7 +245,8 @@ notes/              自用设计、复盘与演示材料（不提交）
 | [MCP 只读服务器](docs/mcp.md) | 向外部 MCP 客户端暴露资料工具 |
 | [公开边界](docs/public-boundary.md) | 本机单用户、分享前检查与托管限制 |
 | [自动路由](docs/routing.md) | 直答、固定检索与 Agent 的选择规则 |
-| [3–5 分钟演示](docs/demo.md) | 合成数据上的完整操作路径 |
+| [真实课程多模态演示](docs/demo.md) | 3–5 分钟 PDF 页面 + 视频字幕/抽样帧 |
+| [离线合成演示](docs/demo-offline.md) | 无课程素材时的文字/PDF 路径 |
 | [演示流程](docs/demo-demo.md) | 5–8 分钟真实学习流程与证据入口 |
 
 ## 隐私与数据
