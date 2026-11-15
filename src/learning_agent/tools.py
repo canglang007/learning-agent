@@ -355,7 +355,10 @@ class MaterialTools:
         except ValidationError:
             return {"error": "invalid_arguments", "detail": "请按工具参数定义重试"}
         except LookupError as error:
-            return {"error": "material_not_found", "detail": str(error)}
+            return {
+                "error": "material_not_found",
+                "detail": f"{error}；先调用list_materials取得真实资料ID，文件名、页标题或猜的ID都不是可用ID。",
+            }
         except PdfError as error:
             return {"error": "render_failed", "detail": str(error)}
         except MediaError as error:

@@ -13,3 +13,4 @@ dist/
 .DS_Store
 .playwright-cli/
 output/
+.pytest-tmp/

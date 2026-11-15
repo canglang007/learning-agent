@@ -324,6 +324,24 @@ def no_process(pid):
     return not status.stdout.strip() or status.stdout.strip().startswith("Z")
 
 
+def ps_available():
+    """Process-group tests need to observe real process state; some sandboxes forbid ps."""
+    try:
+        status = subprocess.run(
+            ["ps", "-o", "pid=", "-p", str(os.getpid())],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return status.returncode == 0 and not status.stderr
+
+
+PS_REASON = "当前环境禁止调用 ps，无法观察进程状态"
+
+
+@pytest.mark.skipif(not ps_available(), reason=PS_REASON)
 def test_cancel_render_kills_owned_process_group_and_never_publishes_partial_png(
     tmp_path, monkeypatch
 ):
@@ -361,6 +379,7 @@ def test_cancel_render_kills_owned_process_group_and_never_publishes_partial_png
     assert store.current_learning_state(conv)["revision"] == 0
 
 
+@pytest.mark.skipif(not ps_available(), reason=PS_REASON)
 def test_parent_death_pipe_terminates_render_descendants_before_publication(tmp_path):
     store, _, _, _ = prepared(tmp_path, "image")
     space = store.spaces()[0]["id"]

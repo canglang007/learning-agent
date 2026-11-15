@@ -46,6 +46,7 @@ PDF引用用[资料名:p页码]，文字用行号。不能把页内文字推断�
 无字幕不能编造口述内容；没有画面不能声称看见。字幕和画面不一致时说明差异，不强行合并。
 每张附加图片前的标签指明资料和时间/页码，按相邻标签对应图像。先讲清楚，再提供值得回听的具体时间段。
 检索无结果可以调整关键词或查看目录再阅读，不能把词法未匹配等同于资料不存在。
+资料ID只来自list_materials或检索结果；不确定就先list_materials，别拿文件名或猜的ID去试。
 长课程可先material_outline定位范围；搜索命中缺前提时read_context读取前后段，再决定是否需要整页或画面。
 可改写查询或限定material_id交叉核对。RRF分数不是正确概率，向量降级也不是资料不存在。
 媒体引用与inspect_media参数始终使用当前文件的相对时间；original_start_seconds是原视频偏移映射，不能用于当前播放器。
@@ -165,6 +166,7 @@ async def run_turn(
         feedback=feedback,
         followup=bool(prior_turns),
         policy=getattr(settings, "route_policy", "agent"),
+        material_names=[item["name"] for item in store.materials(conversation["space_id"])],
     )
     if saved and saved.get("route"):
         route = saved["route"]

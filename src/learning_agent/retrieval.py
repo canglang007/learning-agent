@@ -12,6 +12,7 @@ import httpx
 
 from learning_agent.config import Settings
 from learning_agent.jobs import Jobs, configuration
+from learning_agent.routing import course_codes
 
 INDEX_VERSION = 2
 
@@ -62,12 +63,7 @@ def fuse(*rankings, k=60):
 
 def course_scope(query, chunks):
     """Match explicit course identifiers to filenames, not to the lecture cover text."""
-    identifiers = {
-        word
-        for word in tokenize(query)
-        if re.fullmatch(r"[a-z]+[a-z0-9]*\d[a-z0-9]*", word)
-        and any(word in re.split(r"[^a-z0-9]+", c["name"].casefold()) for c in chunks)
-    }
+    identifiers = course_codes(c["name"] for c in chunks) & set(tokenize(query))
     if not identifiers:
         return chunks, query, []
     selected = [

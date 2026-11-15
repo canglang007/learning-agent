@@ -111,7 +111,10 @@ def test_pdf_regions_errors_and_workspace_scope(tmp_path):
         tools.execute("inspect_page", {**args, "region": [0.9, 0.1, 0.2, 0.7]})["error"]
         == "invalid_region"
     )
-    assert tools.execute("inspect_page", {**args, "page": 3})["error"] == "material_not_found"
+    missing = tools.execute("inspect_page", {**args, "page": 3})
+    assert missing["error"] == "material_not_found"
+    # 错误文案要给出可执行的下一步，否则模型只会换一个猜的ID重试。
+    assert "list_materials" in missing["detail"]
     other = client.post("/api/spaces", json={"content": "other"}).json()["id"]
     assert client.get(f"/api/spaces/{other}/materials/{material}/pages/1/image").status_code == 404
     other_conv = client.post(f"/api/spaces/{other}/conversations").json()["id"]

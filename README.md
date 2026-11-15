@@ -203,7 +203,7 @@ uv run learning-agent-mcp --data-root ./data --space <space_id>
 
 服务器通过 stdio 暴露三个只读工具：`list_materials`、`search_materials`、`read_page`。它不调用模型、不上传、不修改资料；搜索只读取已有分段，PDF 只返回提取文字。完整配置、真实 PDF 演示和边界见 [MCP 只读服务器](docs/mcp.md)。
 
-`examples/` 下提供了文字、PDF、媒体、长课程、检索、恢复、流式和记忆等验收脚本。真实模型调用会产生费用，运行前请阅读对应文档。
+`examples/` 下提供了文字、PDF、媒体、长课程、检索、恢复、流式和记忆等验收脚本；`examples/verify_demo_run.py` 用网页同一套 HTTP 接口跑一次演示提问，把路由、工具序列、已验证引用和每步上下文估算导出成本地证据文件。真实模型调用会产生费用，运行前请阅读对应文档。
 
 ### 项目结构
 
@@ -258,7 +258,7 @@ notes/              自用设计、复盘与演示材料（不提交）
 
 ## 当前状态
 
-- 工程回归：173 项通过、2 项按条件跳过；CI 运行公开检查、pytest、ruff 和 Docker build。
+- 工程回归：共 176 项测试，本机 174 项通过、4 项按条件跳过（进程组用例需要 `ps`，其余按依赖缺失跳过）；CI 运行公开检查、pytest、ruff 和 Docker build。
 - 本地 Docker build/run 与 Compose 配置已验证；GitHub Actions 绿色。
 - 已有自包含演示数据、自动路由、只读 MCP、基线结果表和 3–5 分钟演示脚本。
 - 未提供公网托管、账户鉴权或内置限流；外部用户研究尚未进行，不宣称教学收益。

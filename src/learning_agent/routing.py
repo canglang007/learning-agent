@@ -31,8 +31,32 @@ _MATERIAL_TERMS = (
     "出处",
     "检索",
     "搜索",
-    "cs336",
 )
+# Course codes come from the workspace's own file names, never from a hard-coded list.
+_COURSE_CODE = re.compile(r"[a-z]+[a-z0-9]*\d[a-z0-9]*")
+_NAME_SEPARATORS = re.compile(r"[^a-z0-9]+")
+_NAME_EXTENSION = re.compile(
+    r"\.(?:pdf|mp4|mp3|m4a|wav|mov|webm|mkv|srt|vtt|txt|md|docx|pptx)$", re.IGNORECASE
+)
+# Format words carry digits but are not course identifiers.
+_FORMAT_TOKENS = {"mp4", "mp3", "m4a", "wav", "webm", "mov", "h264", "h265", "vp9", "av1"}
+
+
+def course_codes(names) -> set[str]:
+    """Identifier-like tokens in material names, e.g. cs336 / stat20 / ds100."""
+    codes = set()
+    for name in names:
+        stem = _NAME_EXTENSION.sub("", str(name))
+        for token in _NAME_SEPARATORS.split(stem.casefold()):
+            if _COURSE_CODE.fullmatch(token) and token not in _FORMAT_TOKENS:
+                codes.add(token)
+    return codes
+
+
+def mentions_course_code(text: str, codes) -> bool:
+    return any(
+        re.search(r"(?<![a-z0-9])" + re.escape(code) + r"(?![a-z0-9])", text) for code in codes
+    )
 
 
 def choose_route(
@@ -42,12 +66,15 @@ def choose_route(
     feedback: dict[str, Any] | None = None,
     followup: bool = False,
     policy: str = "auto",
+    material_names=None,
 ) -> tuple[Route, str]:
     """Choose an execution mode without spending an extra model call.
 
     The default is Agent whenever the request carries a selected position,
     feedback, an earlier turn, or an explicit visual/time reference.  This keeps
     the quality-first behavior and only downgrades clear standalone questions.
+    Course codes are matched against the workspace's own material names, so a
+    new course is routed by its files rather than by editing this module.
     """
     if policy != "auto":
         return "agent", "policy_agent"
@@ -60,6 +87,8 @@ def choose_route(
     text = question.casefold()
     if _VISUAL_OR_TIME.search(text):
         return "agent", "explicit_visual_or_time"
+    if material_names and mentions_course_code(text, course_codes(material_names)):
+        return "fixed_rag", "course_code_reference"
     if any(term in text for term in _MATERIAL_TERMS):
         return "fixed_rag", "material_reference"
     return "direct", "general_question"
