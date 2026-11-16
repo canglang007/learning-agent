@@ -138,8 +138,8 @@ uv run python -m learning_agent.evaluation export-run \
 
 本轮原生SQLite线程栈显示并发open/close时等待互斥；本地数据库连接事务现由进程内可重入锁串行保护，事务中不await。并发读取/嵌套读取、完整回归和真实恢复已验证；这是本机短事务方案，多进程之间仍靠SQLite/WAL与既有任务所有权规则，不意味着具备多租户或分布式数据库能力。
 
-## 评测闭环与质量门禁
+## 评测闭环
 
-评测结果如何回到开发并防止退化，见 [评测闭环](evaluation-loop.md)：认可的一次真实评测冻结为 `evals/quality-baseline.json`，改动后重跑并用 `gate` 命令比对。范围不同判 `incomparable`，复核不足判 `insufficient_evidence`，交付/证据/已复核内容下降或重大错误增加判 `regressed`；Token 与耗时只报告、不判定。CI 只跑不调用模型的任务集/基线完整性检查，真实门禁需显式执行。
+评测跑完的结果怎么回到开发，见 [评测闭环](evaluation-loop.md)。认可的一次评测冻成 `evals/quality-baseline.json`，改完东西重跑一次，用 `gate` 比。范围对不上、复核没做完，都判不通过；交付、证据或内容掉下去，或者重大错误增加，判 `regressed`。Token 和耗时只打印，不算质量。CI 里只跑不花钱的结构检查，真实门禁得自己显式跑。
 
 后续可以扩大未运行任务、加入独立人工复核与真实学习者试用；本模块不测量用户长期学习收益，不把评分写成掌握画像。

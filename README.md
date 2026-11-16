@@ -184,7 +184,7 @@ uv run pytest -q
 uv run ruff check .
 ```
 
-CI 在每次 push / pull request 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。评测完整性检查只校验任务集与基线结构，**不调用模型**；真实质量门禁需要冻结报告，显式运行。
+CI 每次 push / pull request 跑公开检查、pytest、ruff、评测完整性检查和 Docker build。评测完整性检查只看任务集和基线的结构，不调模型。质量门禁要冻结报告，本地显式跑。
 
 评测 CLI：
 
@@ -195,7 +195,7 @@ uv run python -m learning_agent.evaluation gate \
   --baseline evals/quality-baseline.json --experiment data/evaluations/my-run
 ```
 
-基线与结果表（无检索直答、固定 RAG 对比）见 [统一评测](docs/evaluation.md) 的“基线与结果表”；本机试点结果见 [评测结果](docs/evaluation-results.md)；评测结果怎样回到开发并防止退化见 [评测闭环](docs/evaluation-loop.md)。
+基线与结果表（无检索直答、固定 RAG 对比）见 [统一评测](docs/evaluation.md) 的“基线与结果表”；本机试点结果见 [评测结果](docs/evaluation-results.md)；评测结果怎么回到开发、怎么防止改坏，见 [评测闭环](docs/evaluation-loop.md)。
 
 ## MCP（可选）
 
