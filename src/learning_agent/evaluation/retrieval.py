@@ -49,30 +49,46 @@ def evaluate_retrieval(experiment, queries, settings, *, max_embeddings=12):
                     "id": query["id"],
                     "question": query["question"],
                     "has_annotated_target": bool(targets),
+                    "unretrievable": query.get("unretrievable"),
                     "first_relevant_rank": ranks[0] if ranks else None,
                     "actual_retrieval": result.get("retrieval"),
                     "dense_status": result.get("dense_status"),
                     "hits": result["hits"],
                 }
             )
-        positives = [r for r in rows if r["has_annotated_target"]]
+        # 标注目标不可经文字检索到达的查询单列，不进召回分母，也不冒充检索失败。
+        scored = [r for r in rows if r["has_annotated_target"] and not r["unretrievable"]]
+        negatives = [r for r in rows if not r["has_annotated_target"]]
         actual = Counter(r["actual_retrieval"] for r in rows)
+        hit_scores = [
+            r["hits"][0]["score"]
+            for r in scored
+            if r["first_relevant_rank"] is not None and r["hits"] and "score" in r["hits"][0]
+        ]
+        negative_scores = [r["hits"][0]["score"] for r in negatives if r["hits"]]
         results.append(
             {
                 "requested_mode": mode,
                 "actual_modes": dict(actual),
-                "annotated_target_queries": len(positives),
-                "annotated_hit_at_5": sum(r["first_relevant_rank"] is not None for r in positives)
-                / len(positives)
-                if positives
+                "annotated_target_queries": len(scored),
+                "unretrievable_queries": [r["id"] for r in rows if r["unretrievable"]],
+                "annotated_hit_at_5": sum(r["first_relevant_rank"] is not None for r in scored)
+                / len(scored)
+                if scored
                 else None,
                 "annotated_mrr_at_5": sum(
-                    1 / r["first_relevant_rank"] if r["first_relevant_rank"] else 0
-                    for r in positives
+                    1 / r["first_relevant_rank"] if r["first_relevant_rank"] else 0 for r in scored
                 )
-                / len(positives)
-                if positives
+                / len(scored)
+                if scored
                 else None,
+                "negative_queries": len(negatives),
+                "negative_top1_scores": [round(s, 4) for s in negative_scores],
+                "negative_score_overlap": (
+                    bool(hit_scores and negative_scores and max(negative_scores) >= min(hit_scores))
+                    if hit_scores and negative_scores
+                    else None
+                ),
                 "rows": rows,
             }
         )
@@ -80,7 +96,12 @@ def evaluate_retrieval(experiment, queries, settings, *, max_embeddings=12):
         "schema_version": 1,
         "kind": "retrieval_component",
         "results": results,
-        "note": "非穷尽标注目标Hit/MRR；无标注负例不计召回分母，候选相似不代表模型应回答。hybrid降级单列，不能声称实际RRF。",
+        "note": (
+            "非穷尽标注目标Hit/MRR；无标注负例不计召回分母，候选相似不代表模型应回答。"
+            "标注目标本身不可经文字检索到达时单列 unretrievable，不算检索失败。"
+            "negative_score_overlap 表示负例最高分不低于命中最低分，说明分数不可用于拒答。"
+            "hybrid降级单列，不能声称实际RRF。"
+        ),
     }
     save_json(root / "components" / (str(uuid4()) + ".json"), result)
     return result

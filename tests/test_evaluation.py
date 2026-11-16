@@ -366,6 +366,68 @@ def test_component_metrics_preserve_annotation_and_actual_mode(tmp_path):
     assert result["results"][1]["rows"][0]["dense_status"] != "ready"
 
 
+def test_unretrievable_target_is_listed_without_counting_as_a_miss(tmp_path):
+    """纯图页没有文字层，检索永远够不着；它该单列，不该拉低召回。"""
+    from learning_agent.evaluation.retrieval import evaluate_retrieval
+    from learning_agent.evaluation.runner import prepare
+
+    root = tmp_path / "component"
+    settings = Settings(_env_file=None, data_root=root / "corpus", retrieval_mode="bm25")
+    path = tmp_path / "notes.txt"
+    path.write_text("matrix multiplication matrix product dot product")
+    corpus = prepare(root / "corpus", {"notes": {"path": str(path)}}, settings)
+    ledger = Ledger(root / "experiment.db")
+    ledger.put("corpus", corpus)
+    ledger.put("limits", {})
+    result = evaluate_retrieval(
+        root,
+        [
+            {"id": "matrix", "question": "matrix multiplication", "expected": [{"asset": "notes"}]},
+            {
+                "id": "scanned",
+                "question": "matrix multiplication",
+                "expected": [{"asset": "notes", "pages": [1]}],
+                "unretrievable": {"reason": "纯图页无文字层"},
+            },
+            {"id": "missing", "question": "dot product", "expected": []},
+        ],
+        settings,
+    )
+    first = result["results"][0]
+    assert first["annotated_target_queries"] == 1
+    assert first["annotated_hit_at_5"] == 1
+    assert first["unretrievable_queries"] == ["scanned"]
+    assert first["negative_queries"] == 1
+    assert first["negative_top1_scores"]
+
+
+def test_negative_score_overlap_flags_scores_as_unusable_for_refusal(tmp_path):
+    """负例最高分不低于命中最低分时，必须标出分数不能用来拒答。"""
+    from learning_agent.evaluation.retrieval import evaluate_retrieval
+    from learning_agent.evaluation.runner import prepare
+
+    root = tmp_path / "component"
+    settings = Settings(_env_file=None, data_root=root / "corpus", retrieval_mode="bm25")
+    path = tmp_path / "notes.txt"
+    path.write_text("matrix multiplication matrix product dot product")
+    corpus = prepare(root / "corpus", {"notes": {"path": str(path)}}, settings)
+    ledger = Ledger(root / "experiment.db")
+    ledger.put("corpus", corpus)
+    ledger.put("limits", {})
+    result = evaluate_retrieval(
+        root,
+        [
+            {"id": "matrix", "question": "matrix multiplication", "expected": [{"asset": "notes"}]},
+            {"id": "missing", "question": "matrix multiplication", "expected": []},
+        ],
+        settings,
+    )
+    first = result["results"][0]
+    assert first["negative_queries"] == 1
+    # 负例和正例走同一次检索，分数相同，于是重叠必然为真。
+    assert first["negative_score_overlap"] is True
+
+
 def test_unlabelled_export_does_not_leak_answer_or_fake_quality(tmp_path):
     from learning_agent.evaluation.collector import export_run
 
