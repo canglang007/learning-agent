@@ -84,6 +84,6 @@ uv run python -m learning_agent.evaluation results \
 
 真实运行会产生模型费用；`data/demo/assets.local.json` 和课程资料只保留在本机。结果表只统计两边都存在的回合；内容复核未完成的回合不当作通过。
 
-当前工程回归为 176 项通过、2 项按条件跳过；CI 同时运行公开检查、pytest、ruff 和 Docker build。
+当前工程回归为 187 项通过、2 项按条件跳过；CI 同时运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
 
 相关设计与边界见[自动路由](routing.md)和[统一评测](evaluation.md)。

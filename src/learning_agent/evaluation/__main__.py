@@ -77,6 +77,16 @@ def main():
     export.add_argument("--run-id", required=True)
     export.add_argument("--output", type=Path, required=True)
     export.add_argument("--include-content", action="store_true")
+    quality = sub.add_parser(
+        "gate", help="质量门禁：只读已冻结报告，与基线对比；不调用模型"
+    )
+    mode = quality.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--baseline", type=Path, help="与已有基线对比")
+    mode.add_argument("--snapshot", type=Path, help="把该报告固化为新基线")
+    quality.add_argument("--experiment", type=Path, required=True)
+    quality.add_argument("--variant")
+    quality.add_argument("--output", type=Path)
+    quality.add_argument("--note", default="")
     args = parser.parse_args()
     try:
         if args.command == "run":
@@ -185,6 +195,27 @@ def main():
             result = evaluate_retrieval(
                 args.experiment, json.loads(args.queries.read_text())["queries"], Settings()
             )
+        elif args.command == "gate":
+            from learning_agent.evaluation.gate import (
+                EXIT_CODES,
+                gate,
+                make_baseline,
+                write_baseline,
+            )
+
+            if args.snapshot:
+                result = make_baseline(
+                    args.experiment, variant=args.variant, note=args.note
+                )
+                write_baseline(args.snapshot, result)
+                exit_code = 0
+            else:
+                result = gate(args.baseline, args.experiment, variant=args.variant)
+                exit_code = EXIT_CODES.get(result["result"], 1)
+            if args.output:
+                save_json(args.output, result)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(exit_code)
         elif args.command == "calibrate":
             if not args.real:
                 parser.error("校准裁判需显式--real；将调用已配置API，讲解模型不会运行")

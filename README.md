@@ -14,7 +14,7 @@ Learning Agent 面向在长课程、讲义和个人资料里自学的场景。�
 - **连续学习**：保存当前目标、卡点、讲解尝试和用户反馈；支持主题接续与可管理的跨会话记忆。
 - **可恢复执行**：问题提交后后台执行，网页显示真实进度；刷新、断线或进程重启后按检查点恢复，可取消，可查看草稿。
 - **本地检索**：中文二元词与英文词 BM25，可选本地/兼容向量服务，使用 RRF 融合；向量不可用时明确退回 BM25。
-- **可评测**：固定 Dataset、逐尝试证据、规则/人工复核、baseline/candidate 对比和只读评测页。
+- **可评测**：固定 Dataset、逐尝试证据、规则/人工复核、baseline/candidate 对比、只读评测页，以及冻结基线与退化门禁。
 
 ## 界面
 
@@ -184,15 +184,18 @@ uv run pytest -q
 uv run ruff check .
 ```
 
-CI 在每次 push / pull request 运行公开检查、pytest、ruff 和 Docker build。
+CI 在每次 push / pull request 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。评测完整性检查只校验任务集与基线结构，**不调用模型**；真实质量门禁需要冻结报告，显式运行。
 
 评测 CLI：
 
 ```bash
 uv run python -m learning_agent.evaluation --help
+# 改动后：把已有报告判定为通过 / 退化 / 不可比 / 复核不足
+uv run python -m learning_agent.evaluation gate \
+  --baseline evals/quality-baseline.json --experiment data/evaluations/my-run
 ```
 
-基线与结果表（无检索直答、固定 RAG 对比）见 [统一评测](docs/evaluation.md) 的“基线与结果表”；本机试点结果见 [评测结果](docs/evaluation-results.md)。
+基线与结果表（无检索直答、固定 RAG 对比）见 [统一评测](docs/evaluation.md) 的“基线与结果表”；本机试点结果见 [评测结果](docs/evaluation-results.md)；评测结果怎样回到开发并防止退化见 [评测闭环](docs/evaluation-loop.md)。
 
 ## MCP（可选）
 
@@ -242,6 +245,7 @@ notes/              自用设计、复盘与演示材料（不提交）
 | [长课程检索](docs/course-retrieval.md) | 分段、BM25/向量融合与验收结果 |
 | [统一评测](docs/evaluation.md) | Dataset、评分、基线对比与结果表 |
 | [评测结果](docs/evaluation-results.md) | 自动路由与多模态基线的本机试点 |
+| [评测闭环](docs/evaluation-loop.md) | 真实迭代案例、质量门禁与不可比/复核不足的判定 |
 | [MCP 只读服务器](docs/mcp.md) | 向外部 MCP 客户端暴露资料工具 |
 | [公开边界](docs/public-boundary.md) | 本机单用户、分享前检查与托管限制 |
 | [自动路由](docs/routing.md) | 直答、固定检索与 Agent 的选择规则 |
@@ -258,7 +262,7 @@ notes/              自用设计、复盘与演示材料（不提交）
 
 ## 当前状态
 
-- 工程回归：176 项通过、2 项按条件跳过；CI 运行公开检查、pytest、ruff 和 Docker build。
+- 工程回归：187 项通过、2 项按条件跳过；CI 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
 - 本地 Docker build/run 与 Compose 配置已验证；GitHub Actions 绿色。
 - 已有自包含演示数据、自动路由、只读 MCP、基线结果表和 3–5 分钟演示脚本。
 - 未提供公网托管、账户鉴权或内置限流；外部用户研究尚未进行，不宣称教学收益。

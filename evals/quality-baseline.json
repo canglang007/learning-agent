@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-11-16T08:15:50.746895+00:00",
+  "source": {
+    "experiment": "data/evaluations/evaluation-pair-v1",
+    "variant": null
+  },
+  "scope": {
+    "suite_version": "1",
+    "rubric_version": "1",
+    "variant": null,
+    "cases": [
+      "feedback_regularization",
+      "retrieve_residual",
+      "retrieve_runtime"
+    ],
+    "turns": [
+      "feedback_regularization:explain",
+      "feedback_regularization:followup",
+      "retrieve_residual:explain",
+      "retrieve_residual:followup",
+      "retrieve_runtime:explain",
+      "retrieve_runtime:followup"
+    ]
+  },
+  "metrics": {
+    "planned": 12,
+    "recorded": 12,
+    "delivered": 12,
+    "completed": 8,
+    "evidence_pass": 2,
+    "evidence_total": 2,
+    "evidence_needs_review": 0,
+    "reviewed": 12,
+    "content_pass": 12,
+    "serious_errors": 0
+  },
+  "thresholds": {
+    "min_review_coverage": 1.0,
+    "max_serious_errors": 0
+  },
+  "note": "来自 evaluation-pair-v1 真实 12 回合配对试验（gpt-6.1-sol / CS336+CS231n，bm25/rrf 各 6 回合），开发 Agent 逐条复核；4 个回合在实验预算下以 budget_exhausted 交付，计入 delivered 但不等于完整成功。evidence_total=2 表示本任务集只有 2 个回合标注了位置/模态证据目标，不是 12 回合都检查了看图；内容复核 12/12 是开发复核，不是独立人工金标准。只作回归信号，不作教学效果或显著性结论。"
+}
