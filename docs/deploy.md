@@ -146,6 +146,32 @@ tar xzf backups/data-2026-11-18.tar.gz -C /srv/learning-agent-trial
 uv run python -m learning_agent.survey --workspace data --output survey.json
 ```
 
+## 八、Azure 学生账号
+
+Azure for Students 给 $100 额度（12 个月，不用绑卡），另有每月 750 小时的免费虚拟机。这条路的特别之处是**关机后公网 IP 能保住**，所以「用的时候再开」和「链接不变」可以同时成立——阿里云的按量付费做不到。
+
+三个坑，建机器前先看清楚。
+
+**免费 750 小时只覆盖三档小规格。** 官方写的是 `B1s`、`B2pts_v2`、`B2ats_v2`，内存都是 1 GiB。1 GiB 跑 `uv sync` 会很吃紧，容器化更不行。要 4 GiB 得选 `B2als_v2`（2 vCPU / 4 GiB），从 $100 额度里扣，常开约 $30/月，用完就停的话只烧磁盘和 IP。
+
+**公网 IP 必须显式设成 Static。** 默认是 Dynamic，一「停止（取消分配）」就被释放，下次开机换了新 IP，发给同学的链接直接失效。静态 IP 每月几美元，买的就是这个稳定性。
+
+**区域选 East Asia（香港）或 Japan East。** 从大陆访问延迟 30–60 ms。选欧美也能跑，只是每次翻页图会明显慢。
+
+建好之后：
+
+- NSG 入站放行 TCP 8320
+- 镜像选 Ubuntu Server 24.04 LTS，认证方式用 SSH key 或密码
+- 关机务必用「停止（取消分配）」，只关操作系统的话计算资源照常计费
+
+开机后第一件事是验出站：
+
+```bash
+curl -sS -m 15 -o /dev/null -w '%{http_code}\n' https://surplustoken.com/v1/models
+```
+
+返回 `401` 就说明链路通（没带 key 被拒是对的）；超时或连不上，说明这台机器到你用的模型网关不通，得换区域或换网关。
+
 ## 几个会被问到的问题
 
 **为什么不用本地模型？** 每轮最多把三张 PDF 页面图发给模型。8B 级别的模型在 2 G 内存的机器上跑不动，租 GPU 比买 token 贵一个数量级，讲图质量还更差。
