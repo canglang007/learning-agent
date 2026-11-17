@@ -149,7 +149,9 @@ LA_ACCESS_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')
 
 设了口令之后，所有页面和接口都要先过 `/login`，会话存在内存里，重启即失效。口令留空就没有登录页——不假装受保护。
 
-放到云服务器上长期跑，见 [docs/deploy.md](docs/deploy.md)。
+放到云服务器上长期跑，见 [docs/deploy.md](docs/deploy.md)。整条路径就是 `./deploy/pack.sh` 打一个 31 M 的包，传上去解压，填 `.env`，跑 `./deploy/install.sh`。
+
+试用结束后问卷结果单独导出：`uv run python -m learning_agent.survey --workspace data --output survey.json`。
 
 ## 使用流程
 
