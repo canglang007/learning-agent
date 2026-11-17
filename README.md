@@ -193,7 +193,13 @@ uv run python -m learning_agent.evaluation --help
 # 改动后：把已有报告判定为通过 / 退化 / 不可比 / 复核不足
 uv run python -m learning_agent.evaluation gate \
   --baseline evals/quality-baseline.json --experiment data/evaluations/my-run
+# 题从哪来：从真实使用里挖回归候选，只读、不调用模型、gold 留空给人补
+uv run python -m learning_agent.evaluation mine-feedback \
+  --workspace data/demo/workspace --output data/feedback/candidates.json \
+  --queue data/feedback/queue.json
 ```
+
+候选进队列后，用 `review-candidate` 定状态并补 gold，`promote-cases` 把接受的并进新版本任务集。三步的规则见 [评测闭环](docs/evaluation-loop.md)。
 
 基线与结果表（无检索直答、固定 RAG 对比）见 [统一评测](docs/evaluation.md) 的“基线与结果表”；本机试点结果见 [评测结果](docs/evaluation-results.md)；评测结果怎么回到开发、怎么防止改坏，见 [评测闭环](docs/evaluation-loop.md)。
 

@@ -88,6 +88,25 @@ def main():
     mine.add_argument("--limit", type=int, default=40)
     mine.add_argument("--min-score", type=int, default=1)
     mine.add_argument("--suite", type=Path, help="额外导出可直接交给run子命令的Suite片段")
+    mine.add_argument("--queue", type=Path, help="把候选并进本机审核队列，已有状态不覆盖")
+    review = sub.add_parser(
+        "review-candidate", help="给候选定状态并补gold；队列是本机文件，不进仓库"
+    )
+    review.add_argument("--queue", type=Path, required=True)
+    review.add_argument("--case-id", required=True)
+    decide = review.add_mutually_exclusive_group(required=True)
+    decide.add_argument("--accept", action="store_true")
+    decide.add_argument("--reject", action="store_true")
+    review.add_argument("--note", default="")
+    review.add_argument("--concept", action="append", dest="concepts", default=[])
+    review.add_argument("--forbid", action="append", dest="forbids", default=[])
+    promote = sub.add_parser(
+        "promote-cases", help="把已接受的候选并进suite，升版本写新文件"
+    )
+    promote.add_argument("--queue", type=Path, required=True)
+    promote.add_argument("--suite", type=Path, required=True)
+    promote.add_argument("--output", type=Path, required=True)
+    promote.add_argument("--version", help="新suite版本号，不填则沿用原版本")
     quality = sub.add_parser(
         "gate", help="质量门禁：只读已冻结报告，与基线对比；不调用模型"
     )
@@ -199,6 +218,7 @@ def main():
             result = export_run(args.workspace, args.run_id, include_content=args.include_content)
             save_json(args.output, result)
         elif args.command == "mine-feedback":
+            from learning_agent.evaluation import queue as queue_store
             from learning_agent.evaluation.feedback import build_suite, mine
 
             result = mine(
@@ -213,6 +233,11 @@ def main():
                 if not result["candidates"]:
                     parser.error("没有达到阈值的候选，不导出空Suite")
                 save_json(args.suite, build_suite(result["candidates"]))
+            merged = None
+            if args.queue:
+                existing = queue_store.load(args.queue)
+                merged = queue_store.merge(existing, result["candidates"])
+                queue_store.save(args.queue, existing)
             print(
                 json.dumps(
                     {
@@ -221,7 +246,61 @@ def main():
                         "candidates": len(result["candidates"]),
                         "output": str(args.output),
                         "suite": str(args.suite) if args.suite else None,
+                        "queue": merged,
                         "network_calls": 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            raise SystemExit(0)
+        elif args.command == "review-candidate":
+            from learning_agent.evaluation import queue as queue_store
+
+            data = queue_store.load(args.queue)
+            entry = queue_store.review(
+                data,
+                args.case_id,
+                "accepted" if args.accept else "rejected",
+                note=args.note,
+                concepts=args.concepts,
+                forbidden=args.forbids,
+            )
+            queue_store.save(args.queue, data)
+            print(
+                json.dumps(
+                    {
+                        "case_id": entry["case_id"],
+                        "status": entry["status"],
+                        "reviewed_at": entry["reviewed_at"],
+                        "gold_ready": queue_store.gold_ready(entry.get("case") or {}),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            raise SystemExit(0)
+        elif args.command == "promote-cases":
+            from learning_agent.evaluation import queue as queue_store
+
+            data = queue_store.load(args.queue)
+            payload, added, blocked = queue_store.promote(
+                data,
+                json.loads(args.suite.read_text()),
+                version=args.version,
+            )
+            if not added:
+                parser.error("没有可promote的候选：要么没接受，要么gold还是空的")
+            save_json(args.output, payload)
+            print(
+                json.dumps(
+                    {
+                        "suite": payload["id"],
+                        "version": payload["version"],
+                        "cases": len(payload["cases"]),
+                        "added": added,
+                        "blocked_empty_gold": blocked,
+                        "output": str(args.output),
                     },
                     ensure_ascii=False,
                     indent=2,
