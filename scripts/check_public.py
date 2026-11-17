@@ -74,6 +74,29 @@ def tracked_files() -> list[Path]:
     return [ROOT / name for name in result.stdout.decode().split("\0") if name]
 
 
+def line_findings(relative: str, line_number: int, line: str) -> list[str]:
+    """扫描一行，返回可直接打印的结论。抽成函数是为了能被测试覆盖。"""
+    found: list[str] = []
+    for label, pattern in PATTERNS:
+        match = pattern.search(line)
+        if match:
+            finding = finding_for(label, match)
+            if finding:
+                found.append(f"{relative}:{line_number}: 疑似 {finding}")
+    for candidate in IPV4.finditer(line):
+        address = candidate.group()
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if parsed.is_global and address not in ALLOWED_IPS:
+            found.append(f"{relative}:{line_number}: 公网地址 {address}，公开仓库会暴露部署实例")
+    for match in HOME_PATH.finditer(line):
+        if match.group(1).lower() not in ALLOWED_HOME_NAMES:
+            found.append(f"{relative}:{line_number}: 个人目录 {match.group()}，公开仓库会暴露本机用户名")
+    return found
+
+
 def main() -> int:
     try:
         files = tracked_files()
@@ -105,27 +128,7 @@ def main() -> int:
         except (UnicodeDecodeError, OSError):
             continue
         for line_number, line in enumerate(text.splitlines(), 1):
-            for label, pattern in PATTERNS:
-                match = pattern.search(line)
-                if match:
-                    finding = finding_for(label, match)
-                    if finding:
-                        findings.append(f"{relative}:{line_number}: 疑似 {finding}")
-            for candidate in IPV4.finditer(line):
-                address = candidate.group()
-                try:
-                    parsed = ipaddress.ip_address(address)
-                except ValueError:
-                    continue
-                if parsed.is_global and address not in ALLOWED_IPS:
-                    findings.append(
-                        f"{relative}:{line_number}: 公网地址 {address}，公开仓库会暴露部署实例"
-                    )
-            for match in HOME_PATH.finditer(line):
-                if match.group(1).lower() not in ALLOWED_HOME_NAMES:
-                    findings.append(
-                        f"{relative}:{line_number}: 个人目录 {match.group()}，公开仓库会暴露本机用户名"
-                    )
+            findings.extend(line_findings(relative, line_number, line))
 
     if findings:
         print("公开检查失败：", file=sys.stderr)
