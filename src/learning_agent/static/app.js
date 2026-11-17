@@ -72,7 +72,9 @@ async function loadSpace(reset=false) {
   await refreshIndex();
   await refreshJobs();
   refreshUploadRecovery();
-  conversation=conversations.find(c=>c.id===conversation)?.id||conversations[0]?.id||'';$('conversations').value=conversation;await loadChat();
+  conversation=conversations.find(c=>c.id===conversation)?.id||conversations[0]?.id||'';
+  if(!conversation&&space){const created=await api(`/spaces/${space}/conversations`,{method:'POST'});$('conversations').innerHTML=`<option value="${created.id}">新会话</option>`;conversation=created.id;}
+  $('conversations').value=conversation;await loadChat();
 }
 async function loadChat() {
   const selectedConversation=conversation;
