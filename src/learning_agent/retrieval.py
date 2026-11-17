@@ -1,11 +1,13 @@
 """Persistent source-aligned chunks, BM25 and dense rank fusion for small local courses."""
 
+import asyncio
 import json
 import math
 import re
 import threading
 import unicodedata
 from collections import Counter
+from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 import httpx
@@ -85,20 +87,68 @@ class EmbeddingError(Exception):
 
 
 class Embedder:
+    """把文本变成归一化向量。
+
+    三种来源：``local`` 在进程内跑 ONNX 小模型（无需外部服务），``ollama`` 与
+    ``compatible`` 走 HTTP。三者共用同一个 ``key``，它是向量缓存的账本列——
+    换模型或换地址都会让旧向量失效并触发重建，不会混用两套向量。
+    """
+
     def __init__(self, settings):
         self.settings = settings
+        self._engine = None
+        self._lock = threading.Lock()
         self.key = json.dumps(
-            [
+            ["local", settings.embedding_model]
+            if settings.embedding_provider == "local"
+            else [
                 settings.embedding_provider,
                 settings.embedding_base_url.rstrip("/"),
                 settings.embedding_model,
             ]
         )
 
+    def engine(self):
+        """惰性加载：不开向量检索的部署不必多装 onnxruntime。"""
+        if self._engine is None:
+            with self._lock:
+                if self._engine is None:
+                    self._engine = self.load()
+        return self._engine
+
+    def load(self):
+        try:
+            from fastembed import TextEmbedding
+        except ImportError:
+            raise EmbeddingError("embedding_local_unavailable:uv_sync_extra_embed") from None
+        settings = self.settings
+        cache = Path(settings.embedding_cache_dir or Path(settings.data_root) / "models")
+        cache.mkdir(parents=True, exist_ok=True)
+        try:
+            return TextEmbedding(
+                model_name=settings.embedding_model,
+                cache_dir=str(cache),
+                threads=settings.embedding_threads or None,
+            )
+        except Exception as error:  # noqa: BLE001 - 首次下载失败、模型名写错、磁盘满都在这里
+            raise EmbeddingError("embedding_local_load_failed:" + type(error).__name__) from None
+
+    def local_embed(self, texts):
+        engine = self.engine()
+        try:
+            with self._lock:
+                # fastembed 给的是 numpy.float32，统一成 float 才能过后续的类型校验
+                vectors = [[float(x) for x in vector] for vector in engine.embed(list(texts))]
+        except Exception as error:  # noqa: BLE001 - onnxruntime/tokenizers 的异常类型不统一
+            raise EmbeddingError("embedding_local_failed:" + type(error).__name__) from None
+        return self.normalize(vectors, len(texts))
+
     def embed(self, texts):
         s = self.settings
         if s.embedding_provider == "disabled":
             raise EmbeddingError("embedding_disabled")
+        if s.embedding_provider == "local":
+            return self.local_embed(texts)
         path = "/api/embed" if s.embedding_provider == "ollama" else "/embeddings"
         payload = {"model": s.embedding_model, "input": texts}
         if s.embedding_provider == "ollama":
@@ -126,6 +176,9 @@ class Embedder:
             if [row["index"] for row in rows] != list(range(count)):
                 raise ValueError("invalid indices")
             vectors = [row["embedding"] for row in rows]
+        return self.normalize(vectors, count)
+
+    def normalize(self, vectors, count):
         if len(vectors) != count or not vectors:
             raise ValueError("invalid count")
         dimension = len(vectors[0])
@@ -147,6 +200,12 @@ class Embedder:
         s = self.settings
         if s.embedding_provider == "disabled":
             raise EmbeddingError("embedding_disabled")
+        if s.embedding_provider == "local":
+            try:
+                return await asyncio.to_thread(self.local_embed, texts)
+            except EmbeddingError as error:
+                error.outcome = "failed"
+                raise
         path = "/api/embed" if s.embedding_provider == "ollama" else "/embeddings"
         payload = {"model": s.embedding_model, "input": texts}
         if s.embedding_provider == "ollama":

@@ -31,7 +31,9 @@ def configuration(kind, settings):
         "pipeline": "embedding-v1",
         "provider": settings.embedding_provider,
         "model": settings.embedding_model,
-        "base_url": settings.embedding_base_url.rstrip("/"),
+        "base_url": ""
+        if settings.embedding_provider == "local"
+        else settings.embedding_base_url.rstrip("/"),
     }
 
 

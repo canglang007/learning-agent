@@ -35,7 +35,13 @@ def execution_profile(settings):
         "embedding_model",
         "embedding_timeout_seconds",
     )
-    embedding = settings.model_copy(update={"base_url": settings.embedding_base_url})
+    embedding = settings.model_copy(
+        update={
+            "base_url": "local://embedding"
+            if settings.embedding_provider == "local"
+            else settings.embedding_base_url
+        }
+    )
     return {
         "version": EXECUTION_VERSION,
         "model": profile_id(settings),

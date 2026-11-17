@@ -51,11 +51,15 @@ class Settings(BaseSettings):
     asr_api_part_seconds: int = Field(default=60, ge=10, le=120)
     asr_context_seconds: int = Field(default=5, ge=0, le=10)
     retrieval_mode: Literal["lexical_baseline", "bm25", "hybrid"] = "hybrid"
-    embedding_provider: Literal["disabled", "ollama", "compatible"] = "disabled"
+    embedding_provider: Literal["disabled", "ollama", "compatible", "local"] = "disabled"
     embedding_base_url: str = "http://localhost:11434"
-    embedding_model: str = "bge-m3:latest"
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     embedding_api_key: SecretStr = SecretStr("")
     embedding_timeout_seconds: float = Field(default=30, gt=0, le=180)
+    embedding_threads: int = Field(default=0, ge=0, le=32)
+    """``local`` 模式的推理线程数；0 表示交给 onnxruntime 按核数决定。"""
+    embedding_cache_dir: str = ""
+    """``local`` 模式的模型缓存目录；留空则用 ``LA_DATA_ROOT/models``。"""
 
     @model_validator(mode="after")
     def context_limits(self):
