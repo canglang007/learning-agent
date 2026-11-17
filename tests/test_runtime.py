@@ -10,6 +10,7 @@ import time
 
 import httpx
 import pytest
+from client_helpers import TestClient
 from fastapi.testclient import TestClient as BaseClient
 from test_feedback import deliver
 from test_learning import call, setup
@@ -345,7 +346,7 @@ def test_completed_identity_can_be_confirmed_even_when_provider_becomes_unconfig
     rid = submit(client, conv).json()["run_id"]
     ended(client, rid)
     client.close()
-    with BaseClient(create_app(Settings(_env_file=None, data_root=tmp_path))) as reopened:
+    with TestClient(create_app(Settings(_env_file=None, data_root=tmp_path))) as reopened:
         assert submit(reopened, conv).json()["run_id"] == rid
         assert submit(reopened, conv, identity="request-0002").status_code == 503
 

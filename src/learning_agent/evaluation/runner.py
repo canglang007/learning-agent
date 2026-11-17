@@ -365,7 +365,11 @@ async def run_experiment(
         async with (
             app.router.lifespan_context(app),
             httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://evaluation"
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://evaluation",
+                # 评测自己也是一个固定访客：接续试验会在新进程里读上一轮的会话，
+                # 换一个身份就会被会话隔离按"不存在"拒掉。
+                headers={"cookie": "la_visitor=evaluation-runner"},
             ) as client,
         ):
             blocked = False

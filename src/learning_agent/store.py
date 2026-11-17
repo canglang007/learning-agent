@@ -32,7 +32,9 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
                     id TEXT PRIMARY KEY, space_id TEXT NOT NULL, name TEXT NOT NULL,
                     text TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS conversations (
-                    id TEXT PRIMARY KEY, space_id TEXT NOT NULL, protocol TEXT NOT NULL DEFAULT '[]');
+                    id TEXT PRIMARY KEY, space_id TEXT NOT NULL,
+                    protocol TEXT NOT NULL DEFAULT '[]',
+                    owner TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS messages (
                     seq INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL,
                     role TEXT NOT NULL, content TEXT NOT NULL, run_id TEXT);
@@ -105,6 +107,9 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
                 db.execute(
                     "ALTER TABLE media ADD COLUMN transcript_revision INTEGER NOT NULL DEFAULT 0"
                 )
+            conversation_columns = {row[1] for row in db.execute("PRAGMA table_info(conversations)")}
+            if "owner" not in conversation_columns:
+                db.execute("ALTER TABLE conversations ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
         self.init_memory()
         self.init_runtime()
         self.init_execution()
@@ -437,12 +442,15 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
             "seconds": seconds,
         }
 
-    def conversation(self, space_id):
+    def conversation(self, space_id, owner=""):
+        """新建会话；``owner`` 是访客标识，空串表示所有人可见（历史数据与示例会话）。"""
         self.require_space(space_id)
-        item = {"id": str(uuid4()), "space_id": space_id}
+        item = {"id": str(uuid4()), "space_id": space_id, "owner": owner}
         with self.connect() as db:
-            db.execute("INSERT INTO conversations(id,space_id) VALUES (:id,:space_id)", item)
-        return item
+            db.execute(
+                "INSERT INTO conversations(id,space_id,owner) VALUES (:id,:space_id,:owner)", item
+            )
+        return {"id": item["id"], "space_id": space_id, "owner": owner}
 
     def get_conversation(self, conversation_id):
         with self.connect() as db:
@@ -453,16 +461,29 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
             raise LookupError("会话不存在")
         return {**dict(row), "protocol": json.loads(row["protocol"])}
 
-    def conversations(self, space_id):
+    def conversations(self, space_id, owner=None):
+        """列会话；给出 ``owner`` 时只返回他新建的和公共示例（``owner=''``）。"""
         self.require_space(space_id)
+        sql = (
+            "SELECT c.id,c.space_id,(SELECT substr(m.content,1,45) FROM messages m "
+            "WHERE m.conversation_id=c.id AND m.role='user' ORDER BY m.seq LIMIT 1) AS title "
+            "FROM conversations c WHERE c.space_id=?"
+        )
+        params = [space_id]
+        if owner is not None:
+            sql += " AND (c.owner='' OR c.owner=?)"
+            params.append(owner)
         with self.connect() as db:
-            return [
-                dict(row)
-                for row in db.execute(
-                    "SELECT c.id,c.space_id,(SELECT substr(m.content,1,45) FROM messages m WHERE m.conversation_id=c.id AND m.role='user' ORDER BY m.seq LIMIT 1) AS title FROM conversations c WHERE c.space_id=? ORDER BY c.rowid DESC",
-                    (space_id,),
-                )
-            ]
+            return [dict(row) for row in db.execute(sql + " ORDER BY c.rowid DESC", params)]
+
+    def run_conversation(self, run_id):
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT conversation_id FROM runs WHERE id=?", (run_id,)
+            ).fetchone()
+        if row is None:
+            raise LookupError("问答任务不存在")
+        return row["conversation_id"]
 
     def messages(self, conversation_id):
         self.get_conversation(conversation_id)

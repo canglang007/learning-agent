@@ -44,7 +44,7 @@ button{{font:inherit;width:100%;padding:10px;border:1px solid #cbd5cc;border-rad
 <label for="code">访问口令</label>
 <input id="code" name="code" type="password" autocomplete="current-password" required autofocus>
 <button type="submit">进入</button>
-<small>同一口令的访客共用一个资料空间，请不要上传私人文件或真实作业。</small>
+<small>资料空间是大家共用的，请不要上传私人文件或真实作业；你的会话只有你自己能看到。</small>
 </form>
 </html>
 """

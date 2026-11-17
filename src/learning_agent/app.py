@@ -105,9 +105,10 @@ def create_app(settings=None, provider=None):
     app.state.store = store
     app.state.jobs = jobs
     app.state.runtime = runtime
-    from learning_agent import access, survey
+    from learning_agent import access, survey, visitor
     from learning_agent.evaluation.web import install
 
+    visitor.install(app)
     install(app, settings)
     access.install(app, settings)
     survey.install(app, store)
@@ -130,6 +131,21 @@ def create_app(settings=None, provider=None):
         from fastapi.responses import JSONResponse
 
         return JSONResponse({"detail": str(error)}, status_code=404)
+
+    def owned(conversation_id, request):
+        """只放行会话本人；``owner`` 为空表示公共会话（示例、迁移前历史、评测产物）。
+
+        越权一律按"不存在"处理，不暴露 id 是否有效。
+        """
+        conversation = store.get_conversation(conversation_id)
+        owner = conversation.get("owner") or ""
+        if owner and owner != visitor.current(request):
+            raise LookupError("会话不存在")
+        return conversation
+
+    def owned_run(run_id, request):
+        owned(store.run_conversation(run_id), request)
+        return run_id
 
     @app.get("/", response_class=HTMLResponse)
     async def home():
@@ -326,15 +342,16 @@ def create_app(settings=None, provider=None):
         return FileResponse(store.root / image["asset_path"], media_type="image/png")
 
     @app.get("/api/spaces/{space_id}/conversations")
-    async def conversations(space_id: str):
-        return store.conversations(space_id)
+    async def conversations(space_id: str, request: Request):
+        return store.conversations(space_id, owner=visitor.current(request))
 
     @app.post("/api/spaces/{space_id}/conversations", status_code=201)
-    async def new_conversation(space_id: str):
-        return store.conversation(space_id)
+    async def new_conversation(space_id: str, request: Request):
+        return store.conversation(space_id, owner=visitor.current(request))
 
     @app.get("/api/conversations/{conversation_id}/messages")
-    async def messages(conversation_id: str):
+    async def messages(conversation_id: str, request: Request):
+        owned(conversation_id, request)
         return store.messages(conversation_id)
 
     def submit_question(conversation_id, payload, request_id):
@@ -385,15 +402,18 @@ def create_app(settings=None, provider=None):
     async def ask(
         conversation_id: str,
         payload: Question,
+        request: Request,
         idempotency_key: str | None = Header(
             default=None, min_length=8, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$"
         ),
     ):
+        owned(conversation_id, request)
         run_id = submit_question(conversation_id, payload, idempotency_key or str(uuid4()))
         return await runtime.wait_result(run_id)
 
     @app.post("/api/conversations/{conversation_id}/runs", status_code=202)
-    async def submit(conversation_id: str, payload: RunQuestion):
+    async def submit(conversation_id: str, payload: RunQuestion, request: Request):
+        owned(conversation_id, request)
         run_id = submit_question(conversation_id, payload, payload.client_request_id)
         return {
             "run_id": run_id,
@@ -405,20 +425,24 @@ def create_app(settings=None, provider=None):
     @app.get("/api/conversations/{conversation_id}/runs")
     async def conversation_runs(
         conversation_id: str,
+        request: Request,
         status: str = Query(default="all", pattern="^(active|all)$"),
         before: int | None = Query(default=None, ge=1),
         limit: int = Query(default=20, ge=1, le=50),
     ):
+        owned(conversation_id, request)
         return store.list_runs(conversation_id, status == "active", before, limit)
 
     @app.post("/api/runs/{run_id}/cancel")
-    async def cancel_run(run_id: str):
+    async def cancel_run(run_id: str, request: Request):
+        owned_run(run_id, request)
         store.cancel_run(run_id)
         runtime.wake.set()
         return store.public_run(run_id)
 
     @app.post("/api/runs/{run_id}/resume", status_code=202)
-    async def resume_run(run_id: str, payload: ResumeRequest):
+    async def resume_run(run_id: str, payload: ResumeRequest, request: Request):
+        owned_run(run_id, request)
         if runtime.task is None or runtime.task.done() or runtime.stopping:
             raise RuntimeUnavailable("问答调度器尚未就绪")
         result = store.resume_run(
@@ -438,6 +462,7 @@ def create_app(settings=None, provider=None):
         after: int = Query(default=0, ge=0),
         last_event_id: str | None = Header(default=None),
     ):
+        owned_run(run_id, request)
         try:
             cursor = int(last_event_id) if last_event_id is not None else after
             events = store.progress_events(run_id, cursor)
@@ -472,7 +497,8 @@ def create_app(settings=None, provider=None):
         )
 
     @app.get("/api/conversations/{conversation_id}/learning")
-    async def learning_state(conversation_id: str):
+    async def learning_state(conversation_id: str, request: Request):
+        owned(conversation_id, request)
         result = store.learning_state(conversation_id)
         summary = store.latest_summary_attempt(
             conversation_id, result["state"]["context_epoch"], profile_id(settings), ready=True
@@ -494,11 +520,15 @@ def create_app(settings=None, provider=None):
         return store.create_learning_topic(space_id, payload.model_dump())
 
     @app.get("/api/conversations/{conversation_id}/context-settings")
-    async def context_settings(conversation_id: str):
+    async def context_settings(conversation_id: str, request: Request):
+        owned(conversation_id, request)
         return store.context_settings(conversation_id)
 
     @app.patch("/api/conversations/{conversation_id}/context-settings")
-    async def update_context_settings(conversation_id: str, payload: ContextSettings):
+    async def update_context_settings(
+        conversation_id: str, payload: ContextSettings, request: Request
+    ):
+        owned(conversation_id, request)
         try:
             return store.edit_context_settings(conversation_id, payload.model_dump())
         except LearningConflict:
@@ -533,7 +563,8 @@ def create_app(settings=None, provider=None):
         return store.edit_memory(space_id, memory_id, {"revision": revision}, forget=True)
 
     @app.patch("/api/conversations/{conversation_id}/learning")
-    async def edit_learning(conversation_id: str, payload: UserStateEdit):
+    async def edit_learning(conversation_id: str, payload: UserStateEdit, request: Request):
+        owned(conversation_id, request)
         try:
             return store.edit_learning_state(
                 conversation_id, payload.model_dump(exclude_unset=True)
@@ -544,7 +575,8 @@ def create_app(settings=None, provider=None):
             raise HTTPException(422, str(error)) from None
 
     @app.get("/api/runs/{run_id}")
-    async def run(run_id: str):
+    async def run(run_id: str, request: Request):
+        owned_run(run_id, request)
         result = store.public_run(run_id)
         answer, events = store.reference_context(run_id)
         space_id = store.get_conversation(result["conversation_id"])["space_id"]
@@ -555,7 +587,8 @@ def create_app(settings=None, provider=None):
         }
 
     @app.get("/api/runs/{run_id}/context")
-    async def run_context(run_id: str):
+    async def run_context(run_id: str, request: Request):
+        owned_run(run_id, request)
         return store.run_context(run_id)
 
     return app
