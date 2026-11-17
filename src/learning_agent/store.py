@@ -118,6 +118,11 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
             yield db
 
     def space(self, name):
+        """新建一个资料空间并返回它；不做同名去重。
+
+        名字有歧义（读起来像"取空间"），但历史调用都按新建语义用。
+        要查已有空间用 ``spaces()``，按名字挑。
+        """
         item = {"id": str(uuid4()), "name": name}
         with self.connect() as db:
             db.execute("INSERT INTO spaces VALUES (:id, :name)", item)

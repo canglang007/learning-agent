@@ -73,6 +73,8 @@ def plan(suite, variants, cases=None, split="dev", repeats=1):
 
 def prepare(root, bindings, settings):
     store = Store(root)
+    # 每次 prepare 新建一个评测空间（不是查找同名空间），因此重复跑批会各留一份，
+    # 清理时按名字删。对外试用空间是 deploy 包里的演示工作区，与此无关。
     sid = store.space("评测资料基线")["id"]
     assets = {}
     for alias, spec in bindings.items():
