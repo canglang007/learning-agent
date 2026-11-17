@@ -180,8 +180,8 @@ LA_ACCESS_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `LA_BASE_URL` | `https://surplustoken.com/v1` | OpenAI 兼容服务地址 |
-| `LA_MODEL` | `gpt-6.1-sol` | 模型 ID |
+| `LA_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容服务地址；换成你自己的网关 |
+| `LA_MODEL` | `gpt-4o-mini` | 模型 ID；按你的网关实际支持的型号填写 |
 | `LA_API_KEY` | 空 | 模型服务密钥；不要提交到仓库 |
 | `LA_PROTOCOL` | `chat_completions` | `chat_completions` 或 `responses` |
 | `LA_ROUTE_POLICY` | `agent` | `agent` 始终走完整 Agent；`auto` 启用自动直答/固定检索 |
@@ -285,21 +285,22 @@ notes/              自用设计、复盘与演示材料（不提交）
 
 ## 当前状态
 
-- 工程回归：189 项通过、2 项按条件跳过；CI 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
+- 工程回归：212 项通过、5 项按条件跳过；CI 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
 - 本地 Docker build/run 与 Compose 配置已验证；GitHub Actions 绿色。
 - 已有自包含演示数据、自动路由、只读 MCP、基线结果表和 3–5 分钟演示脚本。
-- 未提供公网托管、账户鉴权或内置限流；外部用户研究尚未进行，不宣称教学收益。
+- 小型实例实测：1 核 1 GiB 上三路并发提问全部完成，进程常驻约 210 MB；耗时受模型服务影响明显（27–77 秒）。
+- 提供单口令访问、失败限流和按浏览器隔离的会话；**没有**账号体系、配额、账单上限和多租户。外部用户研究尚未进行，不宣称教学收益。
 
 ## 公开边界与许可
 
-本机单用户项目，不提供公网托管、账户鉴权或内置限流；不要把端口直接暴露到互联网。公开仓库前请运行 `uv run python scripts/check_public.py`，并阅读[公开边界](docs/public-boundary.md)。License: MIT。
+默认按本机单用户运行；要对公网开放需自行部署，并设置 `LA_ACCESS_TOKEN`、在反向代理层补 https、限流和额度。应用内的口令只挡无关访问，不是账号系统。公开仓库前请运行 `uv run python scripts/check_public.py`，并阅读[公开边界](docs/public-boundary.md)。License: MIT。
 
 ## 当前边界
 
-- 本机单用户运行，没有账户、权限、多租户或公网部署能力。
+- 没有账号、权限和多租户：同一口令下所有人共用一个资料空间，会话按浏览器隔离但清了 cookie 就找不回。
 - 音视频理解是“字幕 + 抽样帧”，不是连续逐帧观看、直接听音频或说话人分离。
 - ASR 可能断句、漏词或误识别专业术语；已有字幕优先，重要内容需要对照原文或画面。
 - 模型能力、协议和流式支持因服务商而异；Responses 与部分网关的组合仍以实际验证为准。
 - 评测覆盖工程路径和开发过程复核，不宣称真人学习收益或教学通过率。
 
-更新于：2026-11-01 14:13:54（Asia/Shanghai，UTC+08:00）
+更新于：2026-11-17 21:45:00（Asia/Shanghai，UTC+08:00）

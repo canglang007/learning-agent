@@ -109,7 +109,7 @@ RT3已补齐下述流式与综合验收。当前仍是本机单用户、单API�
 
 ## RT3：正文草稿与网关配置
 
-`LA_STREAM_ANSWER`默认false。它进入冻结执行配置，绑定当前网关、型号和协议；切换配置应先结束当前问答。已真实验证配置为surplustoken.com/v1、gpt-6.1-sol、Chat Completions；其他网关和Responses流式需要另行验证。摘要继续使用非流式请求。
+`LA_STREAM_ANSWER`默认false。它进入冻结执行配置，绑定当前网关、型号和协议；切换配置应先结束当前问答。已真实验证配置为一个 OpenAI 兼容网关的 Chat Completions 接口；其他网关和Responses流式需要另行验证。摘要继续使用非流式请求。
 
 `provider.send_stream`只发送一次HTTP请求，Chat Completions按索引拼装tool_calls及usage，Responses依据类型拼装参数并以response.completed中的原生输出为准。两者分别遵循[Chat流式事件](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)和[Responses流式事件](https://developers.openai.com/api/reference/resources/responses/streaming-events)，不混用事件结构。收到协议终止标记后主动关闭连接，不等待网关额外关闭空闲连接。
 

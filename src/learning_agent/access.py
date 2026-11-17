@@ -91,10 +91,6 @@ def install(app, settings):
         target = path + (f"?{request.url.query}" if request.url.query else "")
         return RedirectResponse(f"/login?next={target}", status_code=303)
 
-    @app.get("/healthz")
-    async def healthz():
-        return {"ok": True}
-
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(next: str = ""):
         return _page("", _safe_target(next))

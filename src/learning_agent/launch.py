@@ -138,10 +138,17 @@ def main():
             print(json.dumps(info, ensure_ascii=False, indent=2))
             return
         if not info["configured"]:
-            if not sys.stdin.isatty():
-                parser.error("首次启动请在终端运行 ./start.sh --configure，密钥不需要发到聊天中")
-            configure()
-            settings = Settings().model_copy(update={"data_root": settings.data_root})
+            if sys.stdin.isatty():
+                configure()
+                settings = Settings().model_copy(update={"data_root": settings.data_root})
+            else:
+                # 没有密钥也应能打开界面看演示数据和历史会话；提问会由模型层给出明确失败，
+                # 而不是让第一次克隆仓库的人卡在启动这一步。
+                print(
+                    "未配置模型服务：界面、演示资料和历史会话仍可打开，提问会明确失败。"
+                    "配置方法：./start.sh --configure（密钥只写入本机 .env）。",
+                    flush=True,
+                )
         if info["port_occupied"]:
             parser.error(
                 f"端口{args.port}已被占用，可查看 http://127.0.0.1:{args.port} 或使用--port选择另一个端口；未结束已有服务"

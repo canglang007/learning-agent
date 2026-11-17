@@ -112,6 +112,11 @@ def create_app(settings=None, provider=None):
     install(app, settings)
     access.install(app, settings)
     survey.install(app, store)
+
+    @app.get("/healthz")
+    async def healthz():
+        # 不设口令时也应有健康检查；部署脚本和反向代理需要这个入口。
+        return {"ok": True}
     app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 
     @app.exception_handler(MediaError)
@@ -348,6 +353,15 @@ def create_app(settings=None, provider=None):
     @app.post("/api/spaces/{space_id}/conversations", status_code=201)
     async def new_conversation(space_id: str, request: Request):
         return store.conversation(space_id, owner=visitor.current(request))
+
+    @app.delete("/api/conversations/{conversation_id}", status_code=204)
+    async def delete_conversation(conversation_id: str, request: Request):
+        owned(conversation_id, request)
+        if not store.get_conversation(conversation_id).get("owner"):
+            raise HTTPException(403, "公共示例会话不能删除")
+        if store.list_runs(conversation_id, active=True, limit=1):
+            raise HTTPException(409, "该会话还有进行中的问答，请先停止")
+        store.delete_conversation(conversation_id)
 
     @app.get("/api/conversations/{conversation_id}/messages")
     async def messages(conversation_id: str, request: Request):

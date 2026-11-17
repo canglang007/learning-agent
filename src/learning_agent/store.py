@@ -485,6 +485,37 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
             raise LookupError("问答任务不存在")
         return row["conversation_id"]
 
+    def delete_conversation(self, conversation_id: str) -> None:
+        """删除会话及其全部关联行（消息、轮次、事件、反馈等），不留孤儿行。
+
+        只处理引用了 ``conversation_id`` 或该会话 ``run_id`` 的表，表名来自
+        sqlite_master，不拼接外部输入。
+        """
+        self.get_conversation(conversation_id)
+        with self.connect() as db:
+            run_ids = [
+                row["id"]
+                for row in db.execute("SELECT id FROM runs WHERE conversation_id=?", (conversation_id,))
+            ]
+            tables = [
+                row["name"]
+                for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            ]
+            for table in tables:
+                if table == "conversations" or table.startswith("sqlite_"):
+                    continue
+                columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+                if "conversation_id" in columns:
+                    db.execute(
+                        f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,)
+                    )
+                if "run_id" in columns and run_ids:
+                    placeholders = ",".join("?" * len(run_ids))
+                    db.execute(
+                        f"DELETE FROM {table} WHERE run_id IN ({placeholders})", run_ids
+                    )
+            db.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+
     def messages(self, conversation_id):
         self.get_conversation(conversation_id)
         with self.connect() as db:

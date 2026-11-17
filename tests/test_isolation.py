@@ -102,3 +102,39 @@ def test_same_guest_keeps_own_list_after_restart(tmp_path):
     stranger = second.open()  # 换一台设备
     assert listed(stranger, sid) == []
     second.close()
+
+
+def test_guest_deletes_own_conversation_without_leaving_rows(tmp_path):
+    guests = Guests(tmp_path)
+    alice = guests.open()
+    sid = space(alice)
+    conversation = alice.post(f"/api/spaces/{sid}/conversations").json()["id"]
+    alice.post(
+        f"/api/conversations/{conversation}/messages",
+        json={"content": "留一条消息再删"},
+    )
+
+    assert alice.delete(f"/api/conversations/{conversation}").status_code == 204
+    assert listed(alice, sid) == []
+    assert alice.get(f"/api/conversations/{conversation}/messages").status_code == 404
+
+    with Store(tmp_path).connect() as db:
+        for table in ("messages", "runs"):
+            left = db.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE conversation_id=?", (conversation,)
+            ).fetchone()[0]
+            assert left == 0, f"{table} 还有孤儿行"
+    guests.close()
+
+
+def test_other_guest_cannot_delete_and_public_example_is_protected(tmp_path):
+    guests = Guests(tmp_path)
+    alice, bob = guests.open(), guests.open()
+    sid = space(alice)
+    conversation = alice.post(f"/api/spaces/{sid}/conversations").json()["id"]
+    public = Store(tmp_path).conversation(sid)["id"]  # owner 为空：示例会话
+
+    assert bob.delete(f"/api/conversations/{conversation}").status_code == 404
+    assert bob.delete(f"/api/conversations/{public}").status_code == 403
+    assert alice.get(f"/api/conversations/{conversation}/messages").status_code == 200
+    guests.close()

@@ -8,8 +8,10 @@ let space='', conversation='', configured=false, busy=false, focus=null, media=n
 let uploading=false, pauseUpload=false;
 let learningRevision=0;
 async function api(path, options={}) {
-  const response=await fetch('/api'+path,options), data=await response.json();
-  if(!response.ok) throw Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail));
+  const response=await fetch('/api'+path,options), text=await response.text();
+  let data=null;
+  if(text){try{data=JSON.parse(text);}catch{data=text;}}
+  if(!response.ok) throw Error(typeof data?.detail==='string'?data.detail:JSON.stringify(data?.detail??data));
   return data;
 }
 const post=(path,content)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})});
@@ -226,6 +228,7 @@ $('resume-upload').onclick=guarded(async()=>{
 });
 $('cancel-upload').onclick=guarded(async()=>{const pending=pendingUpload();if(!pending||uploading)return;await api(`/uploads/${pending.id}`,{method:'DELETE'});localStorage.removeItem(uploadKey());refreshUploadRecovery();$('upload-progress').textContent='临时上传已取消';});
 $('new-conversation').onclick=guarded(async()=>{clearFeedback();if(!space)throw Error('请先创建资料空间');const c=await api(`/spaces/${space}/conversations`,{method:'POST'});await loadSpace();conversation=c.id;$('conversations').value=c.id;await loadChat();});
+$('delete-conversation').onclick=guarded(async()=>{clearFeedback();if(!conversation)throw Error('当前没有可删除的会话');if(!confirm('删除这个会话和它的全部问答记录？删除后无法恢复。'))return;await api(`/conversations/${conversation}`,{method:'DELETE'});conversation='';await loadSpace();notice('会话已删除');});
 $('ask-form').onsubmit=async e=>{e.preventDefault();await submitRuntimeQuestion();};
 $('materials').onclick=guarded(async e=>{
   if(e.target.dataset.outline)return showOutline(e.target.dataset.outline);

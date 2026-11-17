@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import subprocess
 import sys
@@ -14,6 +15,11 @@ MAX_BYTES = 10 * 1024 * 1024
 FORBIDDEN_PREFIXES = ("data/", "notes/", "experiments/", "output/", ".venv/")
 FORBIDDEN_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".pem", ".key")
 FORBIDDEN_NAMES = {".env"}
+
+# 公开 DNS/连通性探测地址是正常用法，不算泄漏。
+ALLOWED_IPS = {"8.8.8.8", "1.1.1.1", "223.5.5.5", "114.114.114.114"}
+# 文档里的占位用户目录，不指向某个人的机器。
+ALLOWED_HOME_NAMES = {"user", "you", "your", "example", "runner", "app", "sandbox", "shared"}
 
 PATTERNS = (
     ("openai-style key", re.compile(r"sk-[A-Za-z0-9_-]{20,}")),
@@ -28,17 +34,32 @@ PATTERNS = (
         re.compile(r"LA_EMBEDDING_API_KEY\s*=\s*[\"']?([^\s\"']{8,})"),
     ),
     (
+        "LA_ACCESS_TOKEN assignment",
+        re.compile(r"LA_ACCESS_TOKEN\s*=\s*[\"']?([^\s\"'#]{6,})"),
+    ),
+    (
         "ANTHROPIC_AUTH_TOKEN assignment",
         re.compile(r"ANTHROPIC_AUTH_TOKEN\s*=\s*[\"']?([^\s\"']{8,})"),
     ),
 )
-PLACEHOLDER = re.compile(r"^(your|test|example|placeholder|changeme|none|empty|<)", re.IGNORECASE)
+PLACEHOLDER = re.compile(
+    r"^(your|test|example|placeholder|changeme|none|empty|<)", re.IGNORECASE
+)
+# 文档里的中文占位说明，例如“这里填访问口令”。
+PLACEHOLDER_HINTS = ("你的", "你的密钥", "这里", "填", "口令", "密钥", "示例")
+IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
+HOME_PATH = re.compile(r"/(?:Users|home)/([A-Za-z0-9._-]+)")
 
 
 def finding_for(label: str, match: re.Match[str]) -> str | None:
     if match.lastindex:
         value = match.group(1)
         if PLACEHOLDER.search(value) or "..." in value:
+            return None
+        # shell 命令替换（生成口令的推荐写法）不是密钥本身。
+        if value.startswith(("$", "(", "`")):
+            return None
+        if any(hint in value for hint in PLACEHOLDER_HINTS):
             return None
     return label
 
@@ -78,8 +99,7 @@ def main() -> int:
         if size > MAX_BYTES:
             findings.append(f"{relative}: 文件超过 10 MiB，确认是否为私有数据")
             continue
-        if relative == ".env.example":
-            continue
+        # .env.example 也要扫：示例文件里出现真实密钥同样是泄漏
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -91,6 +111,21 @@ def main() -> int:
                     finding = finding_for(label, match)
                     if finding:
                         findings.append(f"{relative}:{line_number}: 疑似 {finding}")
+            for candidate in IPV4.finditer(line):
+                address = candidate.group()
+                try:
+                    parsed = ipaddress.ip_address(address)
+                except ValueError:
+                    continue
+                if parsed.is_global and address not in ALLOWED_IPS:
+                    findings.append(
+                        f"{relative}:{line_number}: 公网地址 {address}，公开仓库会暴露部署实例"
+                    )
+            for match in HOME_PATH.finditer(line):
+                if match.group(1).lower() not in ALLOWED_HOME_NAMES:
+                    findings.append(
+                        f"{relative}:{line_number}: 个人目录 {match.group()}，公开仓库会暴露本机用户名"
+                    )
 
     if findings:
         print("公开检查失败：", file=sys.stderr)

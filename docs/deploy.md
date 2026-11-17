@@ -44,8 +44,8 @@ vi .env
 要改的四个值：
 
 ```ini
-LA_BASE_URL=https://surplustoken.com/v1
-LA_MODEL=gpt-6-sol
+LA_BASE_URL=https://你的网关.example/v1
+LA_MODEL=你的模型ID
 LA_API_KEY=你的密钥
 LA_ACCESS_TOKEN=这里填访问口令
 LA_HOST=0.0.0.0
@@ -169,7 +169,7 @@ Azure for Students 给 $100 额度（12 个月，不用绑卡），另有每月 
 开机后第一件事是验出站：
 
 ```bash
-curl -sS -m 15 -o /dev/null -w '%{http_code}\n' https://surplustoken.com/v1/models
+curl -sS -m 15 -o /dev/null -w '%{http_code}\n' https://你的网关.example/v1/models
 ```
 
 返回 `401` 就说明链路通（没带 key 被拒是对的）；超时或连不上，说明这台机器到你用的模型网关不通，得换区域或换网关。
