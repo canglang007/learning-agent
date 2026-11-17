@@ -164,8 +164,11 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -m 3 http://127.0.0.
 echo "  GET /api/spaces -> $code（401 是对的）"
 
 echo
-echo "常驻内存（api + worker 两个进程）："
-ps -o rss=,args= -C python3 2>/dev/null | awk '$1>0 {printf "  %d MB  %s\n", $1/1024, $3}' | head -5 || true
+echo "常驻内存（RSS）："
+ps -eo rss=,comm= 2>/dev/null | awk '/python/ {printf "  %d MB  %s\n", $1/1024, $2}' | head -5 || true
+if command -v free >/dev/null 2>&1; then
+    free -m | awk 'NR==1 || NR==2 {print "  " $0}'
+fi
 
 ip=$(curl -fsS -m 5 --noproxy '*' https://api.ipify.org 2>/dev/null || true)
 echo
