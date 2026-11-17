@@ -166,12 +166,12 @@ def event_latencies(events):
     return result
 
 
-def export_run(workspace, rid, *, include_content=False):
+def read_store(workspace):
+    """Open a workspace read-only; export and mining must never write."""
     from contextlib import contextmanager
     from pathlib import Path
 
     from learning_agent.database import connection
-    from learning_agent.evaluation.graders import grade
 
     class ReadStore:
         @contextmanager
@@ -182,7 +182,13 @@ def export_run(workspace, rid, *, include_content=False):
             with connection(path.as_uri() + "?mode=ro", uri=True) as db:
                 yield db
 
-    trace = collect(ReadStore(), rid)
+    return ReadStore()
+
+
+def export_run(workspace, rid, *, include_content=False):
+    from learning_agent.evaluation.graders import grade
+
+    trace = collect(read_store(workspace), rid)
     result = {
         "kind": "unlabelled_run_export",
         "schema_version": 1,

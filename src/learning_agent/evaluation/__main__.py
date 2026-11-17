@@ -77,6 +77,17 @@ def main():
     export.add_argument("--run-id", required=True)
     export.add_argument("--output", type=Path, required=True)
     export.add_argument("--include-content", action="store_true")
+    mine = sub.add_parser(
+        "mine-feedback",
+        help="从真实使用记录里挑回归候选：只读、不调用模型、不自动写gold",
+    )
+    mine.add_argument("--workspace", type=Path, required=True)
+    mine.add_argument("--output", type=Path, required=True)
+    mine.add_argument("--eval-dir", type=Path, default=Path("evals"))
+    mine.add_argument("--since", help="只统计该日期及之后的运行，格式YYYY-MM-DD")
+    mine.add_argument("--limit", type=int, default=40)
+    mine.add_argument("--min-score", type=int, default=1)
+    mine.add_argument("--suite", type=Path, help="额外导出可直接交给run子命令的Suite片段")
     quality = sub.add_parser(
         "gate", help="质量门禁：只读已冻结报告，与基线对比；不调用模型"
     )
@@ -187,6 +198,36 @@ def main():
 
             result = export_run(args.workspace, args.run_id, include_content=args.include_content)
             save_json(args.output, result)
+        elif args.command == "mine-feedback":
+            from learning_agent.evaluation.feedback import build_suite, mine
+
+            result = mine(
+                args.workspace,
+                eval_dir=args.eval_dir,
+                since=args.since,
+                limit=args.limit,
+                min_score=args.min_score,
+            )
+            save_json(args.output, result)
+            if args.suite:
+                if not result["candidates"]:
+                    parser.error("没有达到阈值的候选，不导出空Suite")
+                save_json(args.suite, build_suite(result["candidates"]))
+            print(
+                json.dumps(
+                    {
+                        "scanned": result["scanned"],
+                        "skipped": result["skipped"],
+                        "candidates": len(result["candidates"]),
+                        "output": str(args.output),
+                        "suite": str(args.suite) if args.suite else None,
+                        "network_calls": 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            raise SystemExit(0)
         elif args.command == "retrieval":
             if not args.real:
                 parser.error("检索组件可能调用向量服务，需要显式--real；不会调用讲解模型")

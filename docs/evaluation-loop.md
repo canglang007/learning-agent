@@ -1,10 +1,10 @@
 # 评测闭环：跑出来的结果怎么回到开发
 
-更新于：2026-11-16（Asia/Shanghai，UTC+08:00）。
+更新于：2026-11-17（Asia/Shanghai，UTC+08:00）。
 
 [统一评测](evaluation.md) 和 [本机结果](evaluation-results.md) 讲评测模块本身。这篇只讲一件事：跑完评测之后，结果去了哪里，下次改代码怎么知道有没有改坏。
 
-前四步其实一直是这么干的，第五步今天才补上。所以这篇更像一份补课记录，不是从头设计的方案。
+前四步其实一直是这么干的，第五步 11 月 16 日补上，第六步（题从哪来）11 月 17 日补上。所以这篇更像一份补课记录，不是从头设计的方案。
 
 ```mermaid
 flowchart LR
@@ -17,9 +17,11 @@ flowchart LR
   F -->|passed| G[更新基线]
   F -->|regressed| E
   F -->|incomparable / 复核不足| H[先补齐可比性]
+  I[真实使用<br/>反馈、失败、拒答] --> J[mine-feedback<br/>只排序、给证据]
+  J -->|人工补 gold| A
 ```
 
-## 五步都在干什么
+## 六步都在干什么
 
 1. 先把题出好。`evals/learning-core-v1.json` 里 28 组、56 回合，18 dev、10 holdout。gold 标了证据目标、状态期望和数值检查。holdout 留着，没拿来调参数。
 
@@ -30,6 +32,39 @@ flowchart LR
 4. 把认可的那次结果冻起来，存成 `evals/quality-baseline.json`。里面只有指标、口径和来源，没有答案，也没有课程素材。
 
 5. 改完东西再跑一次，`gate` 读两份冻好的 JSON 就能判：范围还能不能比、复核够不够、硬指标掉没掉。结论用退出码给出来，方便脚本接。
+
+6. 题自己会过期。前五步只保证"改动没把已有的题做坏"，管不了"题本身偏了"。所以从真实使用里往回捞：用户点"这一步没懂"、写了卡点、运行失败、工具报错、回答里出现"资料里没找到"，这些都在 `mine-feedback` 的扫描范围里。
+
+## 第六步具体怎么走
+
+`mine-feedback` 只读 workspace，不发模型请求，也不写数据库。
+
+```bash
+# 看一眼值不值得捞
+uv run python -m learning_agent.evaluation mine-feedback \
+  --workspace data/demo/workspace \
+  --output data/feedback/candidates.json \
+  --since 2026-11-01
+
+# 顺手导一份能直接喂给 run 的骨架
+uv run python -m learning_agent.evaluation mine-feedback \
+  --workspace data/demo/workspace \
+  --output data/feedback/candidates.json \
+  --suite data/feedback/cases.json
+```
+
+它干三件事，只有这三件：
+
+- **排序**。反馈类型给先验分：`stuck` 4 分（用户明说没懂，当前讲法没解决卡点）、`restate` 3 分、`example` 2 分、`understood` 负分（对照组，价值低于失败样本）。运行状态再叠：`failed` 4 分、`interrupted` 和 `budget_exhausted` 各 2 分。另外有几个信号：已完成却没有 canonical 答案、完全没有工具观察却给出长答案、工具观察带 error、回答里出现拒答措辞。
+- **去重**。扫 `evals/*.json` 里所有问题文本，归一化（去空白和标点）后比对。已经在集子里的扣 5 分沉底，并标出是哪个 case、哪个 turn。
+- **给证据**。从实际运行的操作账本里取模型真看过的页和帧，转成 `evidence_targets` 草稿。图片排在文字前面。
+
+它**不做**的，才是关键：不写 `required_concepts`，不写 `forbidden_claims`，不判定"这是一次失败"。导出的 case 里 gold 是空的，`needs_human_gold` 一直是 `true`。分数只用来决定先看哪几条，不是结论。
+
+为什么不自动标：让模型给自己出题、自己判分，评测集就会被模型的偏好污染，几轮之后只会测出"模型还是那个模型"。这条线不越。
+
+反馈类候选天生是两轮：被反馈的那次回答是一轮，反馈本身挂成下一轮（`target_turn` 指回第一轮）。这样重放出来就是"同一个没解决的卡点再问一次"，跟当时真实发生的一样。
+
 
 ## 真改过的三次
 
@@ -80,4 +115,6 @@ CI 里跑 `scripts/check_evaluation.py`，查任务集结构（id、rubric 版�
 
 那 12 回合里有 4 个是在实验预算下以 `budget_exhausted` 交付的，算"已交付"，但不算完整成功。`evidence_total=2` 的意思是这套任务里只有 2 个回合标了位置或模态证据目标，别讲成 12 回合都验了看图。也没有真人学习收益数据，评分不写掌握画像。
 
-还有一块真没做：线上反馈回流。`export-run` 能导出匿名统计，但把线上失败沉淀成评测 case 还得人工确认，目前没有这个机制。这是下一步，不是已经有的东西。
+还有一块得说清楚。反馈回流现在有通道了，但没有真实外部用户：`mine-feedback` 扫的是这台机器上的使用记录，样本来自我自己试用，不是线上流量。所以能讲"机制跑通了"，不能讲"线上失败驱动了评测集"。想改这个口径，只能真找人用一段时间。
+
+自动标注也没做，上面说过原因。候选落库成审核队列（pending / accepted / rejected）也还没做，现在 accepted 是靠人手动改 `evals/*.json`。

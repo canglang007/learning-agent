@@ -106,6 +106,16 @@ uv run python -m learning_agent.evaluation export-run \
 
 默认导出不含原回答；分享前仍需检查自己写入的复核理由，系统不承诺自动消除所有个人信息。报告没有API key、认证头、原生reasoning或base64图片。
 
+单次导出是未标注记录，进不了评测集。要把真实使用里的失败沉淀成 case，用只读的挖掘命令：
+
+```bash
+uv run python -m learning_agent.evaluation mine-feedback \
+  --workspace data/demo/workspace --output data/feedback/candidates.json \
+  --since 2026-11-01 --suite data/feedback/cases.json
+```
+
+它扫运行状态、`learning_feedback` 的类型和卡点原文、工具错误和拒答措辞，按先验分排序，跟 `evals/*.json` 已有的问题去重，再导出已经填好证据位置的 Case 骨架。`required_concepts` 和 `forbidden_claims` 一律留空，交给人补。不调用模型，不写数据库，也不判定某次运行算不算失败。设计取舍见[评测闭环](evaluation-loop.md)。
+
 ## 本地审查页
 
 正常启动后访问`/evaluation`。选择实验 → 并列配置 → 打开某回合 → 看正式答案、评分、失败依据、每次操作和实际输入图片；PDF链接带页码，媒体链接带当前文件时间窗口。只读GET接口包括实验列表、汇总、Trial以及受控资料/图片读取；不接受任意文件路径，不提供网页上的付费运行按钮。
