@@ -6,6 +6,9 @@
 #
 # 前置：/srv/learning-agent-trial/.env 已经填好 LA_API_KEY 和 LA_ACCESS_TOKEN。
 # 这个脚本不会覆盖已有的 .env，也不会把密钥打到屏幕上。
+#
+# 内存小于 1.8 G 的机器（Azure 免费档 B1s/B2ats_v2 是 1 G）会自动补一块
+# 2 G swap，否则 uv 解包依赖和 ffmpeg 转码都可能被 OOM 杀掉。
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -16,7 +19,35 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-echo "== 1/5 系统依赖 =="
+echo "== 1/6 内存与 swap =="
+mem_mb=$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+swap_mb=$(awk '/^SwapTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+echo "内存 ${mem_mb} MB，现有 swap ${swap_mb} MB"
+if [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 1800 ] && [ "$swap_mb" -lt 1024 ]; then
+    echo "内存偏小，补 2 G swap"
+    if [ ! -f /swapfile ]; then
+        if ! fallocate -l 2G /swapfile 2>/dev/null; then
+            dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+        fi
+        chmod 600 /swapfile
+        mkswap /swapfile >/dev/null
+    fi
+    swapon /swapfile 2>/dev/null || true
+    grep -q '^/swapfile' /etc/fstab 2>/dev/null || echo '/swapfile none swap sw 0 0' >>/etc/fstab
+    # 内存本来就紧，别让内核过早把常驻页换出去
+    printf 'vm.swappiness=10\nvm.vfs_cache_pressure=50\n' >/etc/sysctl.d/99-learning-agent.conf
+    sysctl -q -p /etc/sysctl.d/99-learning-agent.conf 2>/dev/null || true
+    swap_mb=$(awk '/^SwapTotal:/ {print int($2/1024)}' /proc/meminfo)
+    echo "swap 现在 ${swap_mb} MB"
+else
+    echo "内存够用，不用加 swap"
+fi
+if [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 1800 ]; then
+    echo "提示：这台机器是试用档。大视频转码会慢，建议在 .env 里设"
+    echo "      LA_MEDIA_MAX_BYTES=314572800（300 MB）和 LA_MEDIA_MAX_SECONDS=3600"
+fi
+
+echo "== 2/6 系统依赖 =="
 missing=""
 for cmd in ffmpeg ffprobe curl; do
     command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
@@ -34,7 +65,7 @@ else
     echo "ffmpeg / curl 已就绪"
 fi
 
-echo "== 2/5 uv =="
+echo "== 3/6 uv =="
 if command -v uv >/dev/null 2>&1; then
     echo "uv $(uv --version)"
 else
@@ -55,7 +86,7 @@ if [ "$uvpath" != "/usr/local/bin/uv" ]; then
 fi
 echo "uv 入口：/usr/local/bin/uv -> $uvpath"
 
-echo "== 3/5 配置检查 =="
+echo "== 4/6 配置检查 =="
 if [ ! -f .env ]; then
     echo "缺少 .env：先 cp .env.example .env 并填写 LA_API_KEY / LA_ACCESS_TOKEN" >&2
     exit 1
@@ -77,10 +108,12 @@ if [ "$host" != "0.0.0.0" ]; then
     echo "提示：LA_HOST=$host，只有本机能连；对外试用请改成 0.0.0.0"
 fi
 
-echo "== 4/5 依赖同步 =="
-uv sync --frozen --no-dev
+echo "== 5/6 依赖同步 =="
+# 小内存机器上把下载和构建并发压下来，避免解包时峰值内存超限
+UV_CONCURRENT_DOWNLOADS=4 UV_CONCURRENT_BUILDS=1 UV_LINK_MODE=copy \
+    uv sync --frozen --no-dev
 
-echo "== 5/5 服务 =="
+echo "== 6/6 服务 =="
 cat >/etc/systemd/system/learning-agent.service <<UNIT
 [Unit]
 Description=Learning Agent（API + 媒体 worker）
@@ -129,6 +162,10 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -m 3 http://127.0.0.
 echo "  GET /        -> $code（303 跳登录页是对的，200 说明口令没生效）"
 code=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -m 3 http://127.0.0.1:8320/api/spaces)
 echo "  GET /api/spaces -> $code（401 是对的）"
+
+echo
+echo "常驻内存（api + worker 两个进程）："
+ps -o rss=,args= -C python3 2>/dev/null | awk '$1>0 {printf "  %d MB  %s\n", $1/1024, $3}' | head -5 || true
 
 ip=$(curl -fsS -m 5 --noproxy '*' https://api.ipify.org 2>/dev/null || true)
 echo
