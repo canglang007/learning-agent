@@ -5,18 +5,34 @@ services:
     env_file: .env
     environment:
       LA_DATA_ROOT: /app/data
+      # 对外暴露时必须设置，否则任何能打开链接的人都能读写全部会话
+      LA_ACCESS_TOKEN: ${LA_ACCESS_TOKEN:-}
     ports:
       - "8320:8320"
     volumes:
-      - ./data:/app/data
+      - ${LA_DATA_DIR:-./data}:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;urllib.request.urlopen('http://127.0.0.1:8320/healthz')
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   worker:
     build: .
     image: learning-agent:local
     env_file: .env
+    # 必须显式指定，否则会继承镜像的 uvicorn 命令，再起一个 API
+    command: ["uv", "run", "--no-dev", "python", "-m", "learning_agent.worker"]
     environment:
       LA_DATA_ROOT: /app/data
     volumes:
-      - ./data:/app/data
+      - ${LA_DATA_DIR:-./data}:/app/data
+    restart: unless-stopped
     depends_on:
       - api

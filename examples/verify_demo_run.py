@@ -88,11 +88,20 @@ def main():
     parser.add_argument("--question", default=DEFAULT_QUESTION)
     parser.add_argument("--timeout", type=float, default=420)
     parser.add_argument(
+        "--access-code",
+        default="",
+        help="对外试用设了 LA_ACCESS_TOKEN 时填口令，脚本会先走一次登录",
+    )
+    parser.add_argument(
         "--output", type=Path, default=Path("data/demo") / "multimodal-run-latest.json"
     )
     options = parser.parse_args()
 
     with httpx.Client(base_url=options.base_url, timeout=30) as client:
+        if options.access_code:
+            login = client.post("/login", data={"code": options.access_code, "next": "/"})
+            if login.status_code not in (200, 303) or not client.cookies.get("la_access"):
+                raise SystemExit(f"登录失败：{login.status_code}；口令错了就换个口令再试")
         status = get(client, "/api/status")
         if not status.get("configured"):
             raise SystemExit("模型未配置；本脚本只做真实运行，不生成占位记录")

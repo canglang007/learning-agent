@@ -105,9 +105,12 @@ def create_app(settings=None, provider=None):
     app.state.store = store
     app.state.jobs = jobs
     app.state.runtime = runtime
+    from learning_agent import access, survey
     from learning_agent.evaluation.web import install
 
     install(app, settings)
+    access.install(app, settings)
+    survey.install(app, store)
     app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 
     @app.exception_handler(MediaError)

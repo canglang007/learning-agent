@@ -136,6 +136,21 @@ docker compose up --build
 
 打开 <http://127.0.0.1:8320>。API 与 worker 共享 `./data`，`Ctrl-C` 结束；不需要在本机安装 Python 或 ffmpeg。Docker daemon 未启动时继续使用 `./start.sh`。
 
+### 给别人试用
+
+`./start.sh` 只监听 127.0.0.1。要让别人打开链接用，两件事缺一不可：设访问口令，再把地址暴露出去。
+
+```bash
+# .env 里设一个口令
+LA_ACCESS_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')
+# 监听所有网卡
+./start.sh --host 0.0.0.0
+```
+
+设了口令之后，所有页面和接口都要先过 `/login`，会话存在内存里，重启即失效。口令留空就没有登录页——不假装受保护。
+
+放到云服务器上长期跑，见 [docs/deploy.md](docs/deploy.md)。
+
 ## 使用流程
 
 1. 新建资料空间，上传文字、PDF 或音视频。

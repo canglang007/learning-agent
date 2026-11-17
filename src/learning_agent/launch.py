@@ -36,6 +36,16 @@ def doctor(settings, port=8320):
     }
 
 
+def local_address():
+    """Best-effort LAN address; no packet is sent for a UDP connect."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return ""
+
+
 def write_config(path, values):
     path = Path(path)
     lines = path.read_text().splitlines() if path.exists() else []
@@ -101,6 +111,11 @@ def stop_children(children):
 def main():
     parser = argparse.ArgumentParser(description="Learning Agent：一次启动API和媒体worker")
     parser.add_argument("--port", type=int, default=8320)
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="监听地址；默认127.0.0.1，对外试用用0.0.0.0（请同时设置访问口令）",
+    )
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--evaluation-root", type=Path)
     parser.add_argument("--no-browser", action="store_true")
@@ -115,7 +130,10 @@ def main():
         settings = Settings()
         if args.data_root:
             settings = settings.model_copy(update={"data_root": args.data_root.resolve()})
+        host = args.host or settings.host
         info = doctor(settings, args.port)
+        info["host"] = host
+        info["access_token_set"] = bool(settings.access_token.get_secret_value())
         if args.doctor:
             print(json.dumps(info, ensure_ascii=False, indent=2))
             return
@@ -156,7 +174,7 @@ def main():
                         "learning_agent.app:create_app",
                         "--factory",
                         "--host",
-                        "127.0.0.1",
+                        host,
                         "--port",
                         str(args.port),
                     ],
@@ -178,6 +196,16 @@ def main():
                 f"已启动：{url}；评测查看：{url}/evaluation。Ctrl-C同时结束API与worker。",
                 flush=True,
             )
+            if host not in {"127.0.0.1", "localhost"}:
+                lan = local_address()
+                if lan:
+                    print(f"局域网地址：http://{lan}:{args.port}", flush=True)
+                if not settings.access_token.get_secret_value():
+                    print(
+                        "注意：已监听非本机地址但没有设置访问口令（LA_ACCESS_TOKEN），"
+                        "同网段任何人都能读写全部会话。",
+                        flush=True,
+                    )
             if not args.no_browser:
                 webbrowser.open(url)
             while all(c.poll() is None for c in children):
