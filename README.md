@@ -138,16 +138,22 @@ docker compose up --build
 
 ### 给别人试用
 
-`./start.sh` 只监听 127.0.0.1。要让别人打开链接用，两件事缺一不可：设访问口令，再把地址暴露出去。
+`./start.sh` 只监听 127.0.0.1。要让别人打开链接用，两件事缺一不可：先决定谁能进来，再把地址暴露出去。
+
+推荐开账号模式：同学用邀请码自己注册，登录后只看得到自己的会话和学习记录。
 
 ```bash
-# .env 里设一个口令
-LA_ACCESS_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')
+# .env 里写一行
+LA_AUTH=accounts
+# 起服务后发邀请码（可多人共用一个码）
+uv run python scripts/accounts.py invite --note 试用 --uses 10
 # 监听所有网卡
 ./start.sh --host 0.0.0.0
 ```
 
-设了口令之后，所有页面和接口都要先过 `/login`，会话存在内存里，重启即失效。口令留空就没有登录页——不假装受保护。
+只想临时挡一下无关访问，也可以退回共享口令：`LA_AUTH=code` 加 `LA_ACCESS_TOKEN`（`python3 -c 'import secrets; print(secrets.token_urlsafe(9))'`）。两种情况都没配就没有登录页——不假装受保护。
+
+账号、邀请码、重置密码都在 `scripts/accounts.py`：`list` 看注册情况，`passwd` 重置密码并踢掉旧登录态，`disable` 停用某个账号而不动数据。
 
 放到云服务器上长期跑，见 [docs/deploy.md](docs/deploy.md)。整条路径就是 `./deploy/pack.sh` 打一个 31 M 的包，传上去解压，填 `.env`，跑 `./deploy/install.sh`。
 
@@ -285,19 +291,19 @@ notes/              自用设计、复盘与演示材料（不提交）
 
 ## 当前状态
 
-- 工程回归：212 项通过、5 项按条件跳过；CI 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
+- 工程回归：234 项通过、5 项按条件跳过；CI 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
 - 本地 Docker build/run 与 Compose 配置已验证；GitHub Actions 绿色。
 - 已有自包含演示数据、自动路由、只读 MCP、基线结果表和 3–5 分钟演示脚本。
 - 小型实例实测：1 核 1 GiB 上三路并发提问全部完成，进程常驻约 210 MB；耗时受模型服务影响明显（27–77 秒）。
-- 提供单口令访问、失败限流和按浏览器隔离的会话；**没有**账号体系、配额、账单上限和多租户。外部用户研究尚未进行，不宣称教学收益。
+- 提供邀请码注册的账号体系（scrypt 密码哈希、登录态存库）、会话与学习记忆按账号隔离；**没有**配额、账单上限和多租户计费。外部用户研究尚未进行，不宣称教学收益。
 
 ## 公开边界与许可
 
-默认按本机单用户运行；要对公网开放需自行部署，并设置 `LA_ACCESS_TOKEN`、在反向代理层补 https、限流和额度。应用内的口令只挡无关访问，不是账号系统。公开仓库前请运行 `uv run python scripts/check_public.py`，并阅读[公开边界](docs/public-boundary.md)。License: MIT。
+默认按本机单用户运行；要对公网开放需自行部署，开 `LA_AUTH=accounts`（或设共享口令），并在反向代理层补 https、限流和额度。应用内的登录只回答"谁能进来、这是谁"，不等于完整的公网防护。公开仓库前请运行 `uv run python scripts/check_public.py`，并阅读[公开边界](docs/public-boundary.md)。License: MIT。
 
 ## 当前边界
 
-- 没有账号、权限和多租户：同一口令下所有人共用一个资料空间，会话按浏览器隔离但清了 cookie 就找不回。
+- 账号只做"谁能进、这是谁"：没有邮箱验证、找回密码、角色权限和多租户计费；忘记密码找部署者用 `scripts/accounts.py passwd` 重置。资料空间仍是共用的，会话、学习主题与记忆按账号隔离。
 - 音视频理解是“字幕 + 抽样帧”，不是连续逐帧观看、直接听音频或说话人分离。
 - ASR 可能断句、漏词或误识别专业术语；已有字幕优先，重要内容需要对照原文或画面。
 - 模型能力、协议和流式支持因服务商而异；Responses 与部分网关的组合仍以实际验证为准。

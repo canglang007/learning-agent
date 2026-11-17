@@ -51,6 +51,15 @@ IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 HOME_PATH = re.compile(r"/(?:Users|home)/([A-Za-z0-9._-]+)")
 
 
+# 检查器自己的回归用例必须写出"坏样本"，否则测不出漏判。只豁免这一个文件，
+# 其他文件照扫；往这里塞真密钥和往别处塞一样明显。
+FIXTURES = {"tests/test_check_public.py"}
+
+
+def exempt(relative: str) -> bool:
+    return relative in FIXTURES
+
+
 def finding_for(label: str, match: re.Match[str]) -> str | None:
     if match.lastindex:
         value = match.group(1)
@@ -113,6 +122,8 @@ def main() -> int:
             continue
         if relative.startswith(FORBIDDEN_PREFIXES) or relative.endswith(FORBIDDEN_SUFFIXES):
             findings.append(f"{relative}: 私有数据或数据库不应被跟踪")
+            continue
+        if exempt(relative):
             continue
         try:
             size = path.stat().st_size

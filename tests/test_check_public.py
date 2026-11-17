@@ -47,3 +47,11 @@ def test_personal_home_path_is_flagged():
 def test_api_key_is_flagged():
     assert scan("LA_API_KEY=sk-abcdefghijklmnopqrstuvwxyz")
     assert not scan("LA_API_KEY=your-key")
+
+
+def test_fixture_exemption_is_narrow():
+    # 这里全是坏样本，所以本文件被豁免；豁免必须只认这一个路径。
+    assert CHECK.exempt("tests/test_check_public.py")
+    assert not CHECK.exempt("tests/test_check_public_extra.py")
+    assert not CHECK.exempt("README.md")
+    assert not CHECK.exempt("scripts/check_public.py")

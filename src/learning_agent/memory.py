@@ -60,14 +60,16 @@ class MemoryStore:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS learning_topics (
                     id TEXT PRIMARY KEY, space_id TEXT NOT NULL, title TEXT NOT NULL,
-                    material_ids TEXT NOT NULL, created_at TEXT NOT NULL);
+                    material_ids TEXT NOT NULL, created_at TEXT NOT NULL,
+                    owner TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS context_settings (
                     conversation_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0,
                     topic_id TEXT, memory_enabled INTEGER NOT NULL DEFAULT 0,
                     history_after INTEGER NOT NULL DEFAULT -1);
                 CREATE TABLE IF NOT EXISTS learning_memories (
                     id TEXT PRIMARY KEY, space_id TEXT NOT NULL, topic_id TEXT NOT NULL,
-                    revision INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL);
+                    revision INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL,
+                    owner TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS memory_versions (
                     memory_id TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL,
                     created_at TEXT NOT NULL, PRIMARY KEY(memory_id,revision));
@@ -77,22 +79,33 @@ class MemoryStore:
                 db.execute(
                     "ALTER TABLE context_settings ADD COLUMN material_versions TEXT NOT NULL DEFAULT '{}'"
                 )
+            # 主题与记忆原先整个空间共享；加 owner 后各账号只见自己的。
+            # 老行的 owner 为空，不再归任何人，等于下线。
+            for table in ("learning_topics", "learning_memories"):
+                columns = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+                if "owner" not in columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
 
-    def learning_topics(self, space_id):
+    def learning_topics(self, space_id, owner=""):
+        """列学习主题；``owner`` 是归属键，只返回自己的和公共的（``owner=''``）。"""
         self.require_space(space_id)
         with self.connect() as db:
             return [
                 {**dict(r), "material_ids": json.loads(r["material_ids"])}
-                for r in db.execute("SELECT * FROM learning_topics WHERE space_id=?", (space_id,))
+                for r in db.execute(
+                    "SELECT id,space_id,title,material_ids,created_at FROM learning_topics "
+                    "WHERE space_id=? AND (owner='' OR owner=?)",
+                    (space_id, owner),
+                )
             ]
 
-    def learning_topic(self, space_id, topic_id):
-        for topic in self.learning_topics(space_id):
+    def learning_topic(self, space_id, topic_id, owner=""):
+        for topic in self.learning_topics(space_id, owner):
             if topic["id"] == topic_id:
                 return topic
         raise LookupError("当前资料空间没有此学习主题")
 
-    def create_learning_topic(self, space_id, payload):
+    def create_learning_topic(self, space_id, payload, owner=""):
         self.require_space(space_id)
         ids = list(dict.fromkeys(payload["material_ids"]))
         for mid in ids:
@@ -106,8 +119,9 @@ class MemoryStore:
         }
         with self.connect() as db:
             db.execute(
-                "INSERT INTO learning_topics VALUES (?,?,?,?,?)",
-                (topic["id"], space_id, topic["title"], json.dumps(ids), topic["created_at"]),
+                "INSERT INTO learning_topics(id,space_id,title,material_ids,created_at,owner) "
+                "VALUES (?,?,?,?,?,?)",
+                (topic["id"], space_id, topic["title"], json.dumps(ids), topic["created_at"], owner),
             )
         return topic
 
@@ -137,7 +151,7 @@ class MemoryStore:
         setting = self.context_settings(conversation_id)
         if not setting["memory_enabled"]:
             return
-        topic = self.learning_topic(conv["space_id"], setting["topic_id"])
+        topic = self.learning_topic(conv["space_id"], setting["topic_id"], conv.get("owner", ""))
         current = json.dumps(
             {
                 mid: self.material(conv["space_id"], mid)["revision"]
@@ -209,7 +223,7 @@ class MemoryStore:
         if payload["memory_enabled"] and not payload["topic_id"]:
             raise ValueError("请先选择要接续的学习主题")
         if payload["topic_id"]:
-            self.learning_topic(conv["space_id"], payload["topic_id"])
+            self.learning_topic(conv["space_id"], payload["topic_id"], conv.get("owner", ""))
         self.current_learning_state(conversation_id)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -236,14 +250,14 @@ class MemoryStore:
             self._invalidate_memory_context(db, [conversation_id])
         return self.context_settings(conversation_id)
 
-    def memories(self, space_id, topic_id):
-        self.learning_topic(space_id, topic_id)
+    def memories(self, space_id, topic_id, owner=""):
+        self.learning_topic(space_id, topic_id, owner)
         with self.connect() as db:
             return [
                 json.loads(r[0])
                 for r in db.execute(
-                    "SELECT payload FROM learning_memories WHERE space_id=? AND topic_id=? AND status!='deleted' ORDER BY rowid",
-                    (space_id, topic_id),
+                    "SELECT payload FROM learning_memories WHERE space_id=? AND topic_id=? AND (owner='' OR owner=?) AND status!='deleted' ORDER BY rowid",
+                    (space_id, topic_id, owner),
                 )
             ]
 
@@ -257,8 +271,8 @@ class MemoryStore:
             )
         ]
 
-    def create_memory(self, space_id, payload):
-        topic = self.learning_topic(space_id, payload["topic_id"])
+    def create_memory(self, space_id, payload, owner=""):
+        topic = self.learning_topic(space_id, payload["topic_id"], owner)
         if not set(payload["material_ids"]) <= set(topic["material_ids"]):
             raise ValueError("记忆资料范围必须属于所选主题；主题未绑定资料时请使用主题级记忆")
         source = None
@@ -268,6 +282,7 @@ class MemoryStore:
             setting = self.context_settings(conv["id"])
             if (
                 conv["space_id"] != space_id
+                or conv.get("owner", "") != owner
                 or setting["topic_id"] != topic["id"]
                 or run["state"] not in ("completed", "budget_exhausted")
             ):
@@ -312,8 +327,9 @@ class MemoryStore:
             ):
                 raise ValueError("每个主题最多保存100条记忆，请整理后再新增")
             db.execute(
-                "INSERT INTO learning_memories VALUES (?,?,?,?,?,?)",
-                (memory["id"], space_id, topic["id"], 1, json.dumps(memory), "active"),
+                "INSERT INTO learning_memories(id,space_id,topic_id,revision,payload,status,owner) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (memory["id"], space_id, topic["id"], 1, json.dumps(memory), "active", owner),
             )
             db.execute(
                 "INSERT INTO memory_versions VALUES (?,?,?,?)",
@@ -322,13 +338,13 @@ class MemoryStore:
             self._invalidate_memory_context(db, dependents)
         return memory
 
-    def edit_memory(self, space_id, memory_id, payload, *, forget=False):
+    def edit_memory(self, space_id, memory_id, payload, *, forget=False, owner=""):
         self.require_space(space_id)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT * FROM learning_memories WHERE id=? AND space_id=? AND status!='deleted'",
-                (memory_id, space_id),
+                "SELECT * FROM learning_memories WHERE id=? AND space_id=? AND (owner='' OR owner=?) AND status!='deleted'",
+                (memory_id, space_id, owner),
             ).fetchone()
             if not row:
                 raise LookupError("当前空间没有此记忆")
@@ -406,7 +422,7 @@ class MemoryStore:
         }
         if not setting["memory_enabled"]:
             return bundle
-        topic = self.learning_topic(conv["space_id"], setting["topic_id"])
+        topic = self.learning_topic(conv["space_id"], setting["topic_id"], conv.get("owner", ""))
         bundle["topic"] = topic
         # A focused source outside the chosen topic is a different learning scope.
         mid = focus.get("material_id") if focus else None
@@ -415,7 +431,7 @@ class MemoryStore:
             return bundle
         query = terms(question)
         candidates = []
-        for memory in self.memories(conv["space_id"], topic["id"]):
+        for memory in self.memories(conv["space_id"], topic["id"], conv.get("owner", "")):
             if memory["status"] != "active":
                 continue
             if any(

@@ -26,7 +26,7 @@ target=$stage/$name
 mkdir -p "$target"
 
 # 代码与运行所需文件
-for item in src pyproject.toml uv.lock README.md docs examples .env.example \
+for item in src scripts pyproject.toml uv.lock README.md docs examples .env.example \
             Dockerfile docker-compose.yml .dockerignore start.sh deploy; do
     if [ -e "$root/$item" ]; then
         cp -R "$root/$item" "$target/"

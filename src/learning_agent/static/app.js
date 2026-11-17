@@ -9,6 +9,7 @@ let uploading=false, pauseUpload=false;
 let learningRevision=0;
 async function api(path, options={}) {
   const response=await fetch('/api'+path,options), text=await response.text();
+  if(response.status===401&&path!=='/me'){location.href='/login';throw Error('登录已过期，正在跳转登录页');}
   let data=null;
   if(text){try{data=JSON.parse(text);}catch{data=text;}}
   if(!response.ok) throw Error(typeof data?.detail==='string'?data.detail:JSON.stringify(data?.detail??data));
@@ -376,4 +377,4 @@ async function openHash() {
   notice('当前本机资料空间没有此媒体',true);
 }
 window.onhashchange=guarded(openHash);
-(async()=>{try{const s=await api('/status');configured=s.configured;asr=s.asr_provider;const c=s.capabilities||{};const modes=[c.text?'文本':'无文本',c.vision?'视觉':'无视觉',c.tool_calling?'工具':'无工具'];$('status').textContent=configured?'模型已配置，可以直接提问。':'未配置模型：可以先浏览资料或已有对话；提问前运行 ./start.sh --configure。';$('tech-status-body').textContent=`模型：${s.model} · 协议：${s.protocol} · 能力：${modes.join(' / ')} · 媒体上限 ${(s.media_max_bytes/1024**3).toFixed(2)} GiB / ${(s.media_max_seconds/3600).toFixed(1)} 小时`;$('tech-status').hidden=false;await loadSpaces();await openHash();}catch(e){notice(e.message,true);}})();
+(async()=>{try{const me=await api('/me');if(me?.authenticated){$('account-name').textContent=me.username;$('account-bar').hidden=false;}const s=await api('/status');configured=s.configured;asr=s.asr_provider;const c=s.capabilities||{};const modes=[c.text?'文本':'无文本',c.vision?'视觉':'无视觉',c.tool_calling?'工具':'无工具'];$('status').textContent=configured?'模型已配置，可以直接提问。':'未配置模型：可以先浏览资料或已有对话；提问前运行 ./start.sh --configure。';$('tech-status-body').textContent=`模型：${s.model} · 协议：${s.protocol} · 能力：${modes.join(' / ')} · 媒体上限 ${(s.media_max_bytes/1024**3).toFixed(2)} GiB / ${(s.media_max_seconds/3600).toFixed(1)} 小时`;$('tech-status').hidden=false;await loadSpaces();await openHash();}catch(e){notice(e.message,true);}})();

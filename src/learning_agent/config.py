@@ -13,8 +13,11 @@ class Settings(BaseSettings):
     protocol: Literal["chat_completions", "responses"] = "chat_completions"
     route_policy: Literal["agent", "auto"] = "agent"
     data_root: Path = Path("data")
-    """对外试用时填一个口令；留空则保持仅本机访问的原有行为。"""
+    auth: Literal["auto", "accounts", "code", "off"] = "auto"
+    """账号体系：accounts=用户名密码，code=共享口令，off=不鉴权，auto=按现有数据自动选。"""
+    session_days: int = Field(default=30, ge=1, le=365)
     access_token: SecretStr = SecretStr("")
+    """``code`` 模式下的共享口令；``accounts`` 模式不再使用它。"""
     host: str = "127.0.0.1"
     timeout_seconds: float = Field(default=90, gt=0)
     max_steps: int = Field(default=8, ge=1, le=20)

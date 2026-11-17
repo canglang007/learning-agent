@@ -4,7 +4,8 @@
 # 用法（在解压出来的目录里，用 root）：
 #   ./deploy/install.sh
 #
-# 前置：/srv/learning-agent-trial/.env 已经填好 LA_API_KEY 和 LA_ACCESS_TOKEN。
+# 前置：/srv/learning-agent-trial/.env 已经填好 LA_API_KEY，以及 LA_AUTH=accounts
+# （推荐）或 LA_ACCESS_TOKEN（共享口令）。
 # 这个脚本不会覆盖已有的 .env，也不会把密钥打到屏幕上。
 #
 # 内存小于 1.8 G 的机器（Azure 免费档 B1s/B2ats_v2 是 1 G）会自动补一块
@@ -93,15 +94,17 @@ if [ ! -f .env ]; then
 fi
 chmod 600 .env
 token=$(sed -n 's/^LA_ACCESS_TOKEN=//p' .env | head -1)
+auth=$(sed -n 's/^LA_AUTH=//p' .env | head -1)
 key=$(sed -n 's/^LA_API_KEY=//p' .env | head -1)
 host=$(sed -n 's/^LA_HOST=//p' .env | head -1)
 if [ -z "$key" ]; then
     echo "LA_API_KEY 为空，服务起来也答不了问题" >&2
     exit 1
 fi
-if [ -z "$token" ]; then
-    echo "LA_ACCESS_TOKEN 为空，任何拿到链接的人都能看全部会话" >&2
-    echo "生成一个：python3 -c 'import secrets; print(secrets.token_urlsafe(9))'" >&2
+if [ -z "$token" ] && [ "$auth" != "accounts" ]; then
+    echo "既没开账号模式（LA_AUTH=accounts），也没有 LA_ACCESS_TOKEN" >&2
+    echo "任何拿到链接的人都能看全部会话。二选一：在 .env 写 LA_AUTH=accounts，" >&2
+    echo "或者生成一个共享口令：python3 -c 'import secrets; print(secrets.token_urlsafe(9))'" >&2
     exit 1
 fi
 if [ "$host" != "0.0.0.0" ]; then
@@ -159,9 +162,19 @@ fi
 echo
 echo "未登录访问应当被拦："
 code=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -m 3 http://127.0.0.1:8320/)
-echo "  GET /        -> $code（303 跳登录页是对的，200 说明口令没生效）"
+echo "  GET /        -> $code（303 跳登录页是对的，200 说明没设防）"
 code=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -m 3 http://127.0.0.1:8320/api/spaces)
 echo "  GET /api/spaces -> $code（401 是对的）"
+
+if [ "$auth" = "accounts" ] && [ -n "$token" ]; then
+    echo "  提示：LA_AUTH=accounts 时 LA_ACCESS_TOKEN 不生效，可以删掉那一行"
+fi
+if [ "$auth" = "accounts" ]; then
+    echo
+    echo "账号模式：现在还没有任何人都进不去，先发邀请码："
+    echo "  uv run python scripts/accounts.py invite --note 试用 --uses 10"
+    echo "  uv run python scripts/accounts.py list"
+fi
 
 echo
 echo "常驻内存（RSS）："

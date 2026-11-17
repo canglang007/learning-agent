@@ -1,8 +1,7 @@
-"""Shared access code, so the app can be exposed beyond localhost.
+"""共享口令：``LA_AUTH=code`` 时启用，所有人共用一个口令。
 
-Off by default. Without ``LA_ACCESS_TOKEN`` nothing changes: the app only
-listens where the launcher puts it. Once a token is set, every page and API
-call needs a session cookie obtained from ``/login``.
+账号模式（``accounts.py``）是默认推荐；这里留着是为了"临时挡一下无关访问"这种场景。
+没有 ``LA_ACCESS_TOKEN`` 时 ``install`` 直接返回，不注册登录页——不假装受保护。
 """
 
 from __future__ import annotations

@@ -133,7 +133,12 @@ def main():
         host = args.host or settings.host
         info = doctor(settings, args.port)
         info["host"] = host
-        info["access_token_set"] = bool(settings.access_token.get_secret_value())
+        # 实际生效的鉴权方式：auto 要看库里有没有账号或邀请码。
+        from learning_agent.accounts import resolve
+        from learning_agent.store import Store
+
+        auth_mode = resolve(settings, Store(settings.data_root))
+        info["auth"] = auth_mode
         if args.doctor:
             print(json.dumps(info, ensure_ascii=False, indent=2))
             return
@@ -207,10 +212,16 @@ def main():
                 lan = local_address()
                 if lan:
                     print(f"局域网地址：http://{lan}:{args.port}", flush=True)
-                if not settings.access_token.get_secret_value():
+                if auth_mode == "off":
                     print(
-                        "注意：已监听非本机地址但没有设置访问口令（LA_ACCESS_TOKEN），"
+                        "注意：已监听非本机地址但没有任何鉴权（LA_AUTH=off 且没设口令），"
                         "同网段任何人都能读写全部会话。",
+                        flush=True,
+                    )
+                elif auth_mode == "code":
+                    print(
+                        "当前用共享口令模式：所有人共用一个口令，认不出谁是谁；"
+                        "要按人隔离请改用 LA_AUTH=accounts。",
                         flush=True,
                     )
             if not args.no_browser:

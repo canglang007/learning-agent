@@ -105,12 +105,14 @@ def create_app(settings=None, provider=None):
     app.state.store = store
     app.state.jobs = jobs
     app.state.runtime = runtime
-    from learning_agent import access, survey, visitor
+    from learning_agent import access, accounts, survey, visitor
     from learning_agent.evaluation.web import install
 
     visitor.install(app)
     install(app, settings)
-    access.install(app, settings)
+    # 账号与共享口令互斥：accounts 模式自己处理登录，口令只在 code 模式生效。
+    if accounts.install(app, settings, store) == "code":
+        access.install(app, settings)
     survey.install(app, store)
 
     @app.get("/healthz")
@@ -144,7 +146,7 @@ def create_app(settings=None, provider=None):
         """
         conversation = store.get_conversation(conversation_id)
         owner = conversation.get("owner") or ""
-        if owner and owner != visitor.current(request):
+        if owner and owner != accounts.owner_key(request):
             raise LookupError("会话不存在")
         return conversation
 
@@ -348,11 +350,11 @@ def create_app(settings=None, provider=None):
 
     @app.get("/api/spaces/{space_id}/conversations")
     async def conversations(space_id: str, request: Request):
-        return store.conversations(space_id, owner=visitor.current(request))
+        return store.conversations(space_id, owner=accounts.owner_key(request))
 
     @app.post("/api/spaces/{space_id}/conversations", status_code=201)
     async def new_conversation(space_id: str, request: Request):
-        return store.conversation(space_id, owner=visitor.current(request))
+        return store.conversation(space_id, owner=accounts.owner_key(request))
 
     @app.delete("/api/conversations/{conversation_id}", status_code=204)
     async def delete_conversation(conversation_id: str, request: Request):
@@ -526,12 +528,14 @@ def create_app(settings=None, provider=None):
         return JSONResponse(status_code=409, content={"detail": str(error)})
 
     @app.get("/api/spaces/{space_id}/learning-topics")
-    async def topics(space_id: str):
-        return store.learning_topics(space_id)
+    async def topics(space_id: str, request: Request):
+        return store.learning_topics(space_id, accounts.owner_key(request))
 
     @app.post("/api/spaces/{space_id}/learning-topics", status_code=201)
-    async def create_topic(space_id: str, payload: TopicCreate):
-        return store.create_learning_topic(space_id, payload.model_dump())
+    async def create_topic(space_id: str, payload: TopicCreate, request: Request):
+        return store.create_learning_topic(
+            space_id, payload.model_dump(), accounts.owner_key(request)
+        )
 
     @app.get("/api/conversations/{conversation_id}/context-settings")
     async def context_settings(conversation_id: str, request: Request):
@@ -551,30 +555,42 @@ def create_app(settings=None, provider=None):
             raise HTTPException(422, str(error)) from None
 
     @app.get("/api/spaces/{space_id}/memories")
-    async def memories(space_id: str, topic_id: str):
-        return store.memories(space_id, topic_id)
+    async def memories(space_id: str, topic_id: str, request: Request):
+        return store.memories(space_id, topic_id, accounts.owner_key(request))
 
     @app.post("/api/spaces/{space_id}/memories", status_code=201)
-    async def create_memory(space_id: str, payload: MemoryCreate):
+    async def create_memory(space_id: str, payload: MemoryCreate, request: Request):
         try:
-            return store.create_memory(space_id, payload.model_dump())
+            return store.create_memory(
+                space_id, payload.model_dump(), accounts.owner_key(request)
+            )
         except LearningConflict:
             raise
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 
     @app.patch("/api/spaces/{space_id}/memories/{memory_id}")
-    async def update_memory(space_id: str, memory_id: str, payload: MemoryEdit):
+    async def update_memory(
+        space_id: str, memory_id: str, payload: MemoryEdit, request: Request
+    ):
         try:
-            return store.edit_memory(space_id, memory_id, payload.model_dump())
+            return store.edit_memory(
+                space_id, memory_id, payload.model_dump(), owner=accounts.owner_key(request)
+            )
         except LearningConflict:
             raise
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 
     @app.delete("/api/spaces/{space_id}/memories/{memory_id}")
-    async def forget_memory(space_id: str, memory_id: str, revision: int):
-        return store.edit_memory(space_id, memory_id, {"revision": revision}, forget=True)
+    async def forget_memory(space_id: str, memory_id: str, revision: int, request: Request):
+        return store.edit_memory(
+            space_id,
+            memory_id,
+            {"revision": revision},
+            forget=True,
+            owner=accounts.owner_key(request),
+        )
 
     @app.patch("/api/conversations/{conversation_id}/learning")
     async def edit_learning(conversation_id: str, payload: UserStateEdit, request: Request):

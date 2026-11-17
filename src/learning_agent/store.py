@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from learning_agent.accounts import AccountStore
 from learning_agent.drafts import DraftStore
 from learning_agent.execution_store import ExecutionStore
 from learning_agent.memory import MemoryStore
@@ -19,7 +20,7 @@ from learning_agent.run_store import (
 )
 
 
-class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
+class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
     def __init__(self, root: Path):
         self.root = root
         (root / "materials").mkdir(parents=True, exist_ok=True)
@@ -111,6 +112,7 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
             if "owner" not in conversation_columns:
                 db.execute("ALTER TABLE conversations ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
         self.init_memory()
+        self.init_accounts()
         self.init_runtime()
         self.init_execution()
         self.init_drafts()
@@ -443,7 +445,11 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
         }
 
     def conversation(self, space_id, owner=""):
-        """新建会话；``owner`` 是访客标识，空串表示所有人可见（历史数据与示例会话）。"""
+        """新建会话。
+
+        ``owner`` 是归属键：登录用户为 ``u:<user_id>``，匿名模式是访客 cookie 值。
+        空串表示所有人可见（示例会话、迁移前的历史、评测产物）。
+        """
         self.require_space(space_id)
         item = {"id": str(uuid4()), "space_id": space_id, "owner": owner}
         with self.connect() as db:
@@ -462,7 +468,7 @@ class Store(MemoryStore, ExecutionStore, RunStore, DraftStore):
         return {**dict(row), "protocol": json.loads(row["protocol"])}
 
     def conversations(self, space_id, owner=None):
-        """列会话；给出 ``owner`` 时只返回他新建的和公共示例（``owner=''``）。"""
+        """列会话；给出 ``owner`` 时只返回他自己的和公共示例（``owner=''``）。"""
         self.require_space(space_id)
         sql = (
             "SELECT c.id,c.space_id,(SELECT substr(m.content,1,45) FROM messages m "
