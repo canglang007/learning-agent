@@ -209,6 +209,35 @@ uv run python scripts/prepare_multimodal_suite.py
 跑完后全量复核用 `regrade --judge-budget 60 --judge --limit 60`
 （扩展操作以 `limits-extension` 记录进账目，不手改数据库）。
 
+## learning-core-v4 全量重跑：指令瘦身 + rerank 融合的质量验证（2026-11-19）
+
+v4（suite version=4，commit `e8ef9d0`，gpt-6-sol，56 回合全量，
+102 个主模型请求 ≈ 55 万 tokens）在两项改进落地后重跑：
+
+- **完成 50/56**（v3 为 53/56）。差异回合逐个定性：
+  - `matrix_shapes:explain` interrupted——第 2 步请求 90 秒网关超时
+    （`remote_result_unknown`），纯网络偶然；同用例单独补跑 2/2 completed，
+    证明用例本身不受指令瘦身影响。评测框架对 interrupted 无自动重试
+    （request_id 绑定原 run，设计如此），补跑走独立目录、不混入主账本。
+  - `conflict_notes` / `summary_recall`×2 budget_exhausted——都是 max_steps=4
+    用例在第 4 步（无工具、只许正文）以正文交付了实质答案：矛盾指认带
+    PDF 页码引用、摘要回忆诚实标注、followup 正确吸收纠正。行为变化：
+    v3 里模型第 4 步调用 deliver_explanation（completed），v4 瘦身后的指令
+    让模型更倾向直接正文（budget_exhausted 但答案在场）。
+- **judge 全量复核 54/54：criteria 52/56 pass，与 v3 持平**。v3 的
+  `conflict_notes:followup` fail（未说明不可判定）在 v4 修复；
+  四维评分 accuracy 2.89 / 卡点 2.91 / 清晰 2.98 / 反馈 2.88（v3 为
+  2.93/2.96/2.96/3.00），差异在逐回合内容不同的波动范围内。
+- **发现并修复 judge 复核盲区**：`summary_recall:explain` 被判 serious_error
+  （"断言目标原话缺乏依据"），但 trace 取证显示摘要 payload 里的
+  `user_quote` 与模型引用**逐字一致**——摘要触发后早期对话被移出输入，
+  judge 只看 conversation_history 看不到摘要，把如实引用误判成捏造。
+  修复：judge 复核输入注入 `summary_evidence`（按 input_ref 的 summary_id
+  从 trial workspace 读摘要条目），指令明确"引用摘要 user_quote 属于有据
+  引用"；新增测试 `test_summary_evidence_exposes_quoted_context_to_the_judge`。
+  网关复检时不可达（连管理页都超时），修复后 judge 对该回合的复核意见
+  暂缺，补跑与重评留待网关恢复。
+
 ## 已知局限
 
 - 纯视频题只有 5 条，1 条失败就差 0.2；`video_cite_papers` 命中在第 5 名，

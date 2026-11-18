@@ -526,3 +526,36 @@ def test_judge_budget_extension_is_recorded(tmp_path):
     assert extensions[0]["purpose"] == "judge" and extensions[0]["to"] == 60
     with pytest.raises(ValueError):
         extend_judge_budget(tmp_path, -1)
+
+
+def test_summary_evidence_exposes_quoted_context_to_the_judge(tmp_path):
+    """judge 复核输入必须包含模型实际收到的摘要条目，否则如实引用摘要
+    原话会被误判成无依据断言（v4 全量复核实测）。"""
+    import sqlite3
+
+    from learning_agent.evaluation.review import summary_evidence
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    payload = json.dumps(
+        {
+            "items": [
+                {
+                    "kind": "user_statement",
+                    "text": "用户的目标是比较近似的绝对误差。",
+                    "user_quote": "我的目标是比较近似的绝对误差。",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+    with sqlite3.connect(workspace / "workspace.db") as db:
+        db.execute("CREATE TABLE context_summaries (id TEXT PRIMARY KEY, payload TEXT)")
+        db.execute("INSERT INTO context_summaries VALUES ('s1', ?)", (payload,))
+    manifests = [{"schema_version": 1, "summary_id": "s1", "evidence": []}]
+    items = summary_evidence(workspace, manifests)
+    assert len(items) == 1
+    assert items[0]["user_quote"] == "我的目标是比较近似的绝对误差。"
+    assert items[0]["summary_id"] == "s1"
+    # 无摘要 id / 无表 / 库缺失时如实返回空，不制造证据。
+    assert summary_evidence(workspace, [{"schema_version": 1}]) == []
