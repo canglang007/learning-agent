@@ -7,7 +7,7 @@ from learning_agent.config import Settings
 from learning_agent.evaluation.baselines import baseline_plan, build_results, run_baselines
 from learning_agent.evaluation.ledger import save_json
 from learning_agent.evaluation.report import compare, report
-from learning_agent.evaluation.review import judge, save_review
+from learning_agent.evaluation.review import extend_judge_budget, judge, save_review
 from learning_agent.evaluation.runner import configuration, plan, run_experiment
 from learning_agent.evaluation.schemas import Suite
 from learning_agent.provider import ModelError
@@ -60,6 +60,14 @@ def main():
     review.add_argument("--reviews", type=Path)
     review.add_argument("--judge", action="store_true")
     review.add_argument("--retry-judge", action="store_true")
+    review.add_argument(
+        "--judge-budget",
+        type=int,
+        help=(
+            "显式提高该实验的 judge 预算并留下扩展记录；"
+            "跑实验时固化的 limits.judge 通常按抽样复核设置，全量复核需要扩展"
+        ),
+    )
     review.add_argument("--limit", type=int, default=12)
     legacy = sub.add_parser("import-legacy")
     legacy.add_argument("source", type=Path)
@@ -202,6 +210,8 @@ def main():
         elif args.command == "compare":
             result = compare(args.baseline, args.candidate, variants=args.variants)
         elif args.command == "regrade":
+            if args.judge_budget is not None:
+                extend_judge_budget(args.experiment, args.judge_budget)
             if args.reviews:
                 for value in json.loads(args.reviews.read_text()):
                     save_review(args.experiment, value)

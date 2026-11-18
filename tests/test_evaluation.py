@@ -510,3 +510,19 @@ def test_concurrent_judges_cannot_duplicate_paid_request(tmp_path):
         assert len(requests) == 1
 
     asyncio.run(scenario())
+
+
+def test_judge_budget_extension_is_recorded(tmp_path):
+    from learning_agent.evaluation.ledger import Ledger
+    from learning_agent.evaluation.review import extend_judge_budget
+
+    ledger = Ledger(tmp_path / "experiment.db")
+    ledger.put("limits", {"main_model": 10, "judge": 12})
+    previous = extend_judge_budget(tmp_path, 60)
+    assert previous == 12
+    assert ledger.get("limits")["judge"] == 60
+    extensions = ledger.records("limits-extension:")
+    assert len(extensions) == 1
+    assert extensions[0]["purpose"] == "judge" and extensions[0]["to"] == 60
+    with pytest.raises(ValueError):
+        extend_judge_budget(tmp_path, -1)

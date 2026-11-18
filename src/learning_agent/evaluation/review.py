@@ -64,6 +64,31 @@ def save_review(root, value):
     return value
 
 
+def extend_judge_budget(root, budget):
+    """显式提高实验的 judge 预算并留下扩展记录。
+
+    跑实验时固化的 ``limits.judge`` 通常按抽样复核设置；全量复核是跑完之后
+    的独立阶段，预算扩展应当是有记录、可审计的操作，而不是手改账目。
+    """
+    if budget < 0:
+        raise ValueError("judge 预算不能为负")
+    ledger = Ledger(Path(root) / "experiment.db")
+    limits = ledger.get("limits", {})
+    previous = limits.get("judge")
+    limits["judge"] = budget
+    ledger.put("limits", limits)
+    ledger.put(
+        "limits-extension:" + now(),
+        {
+            "purpose": "judge",
+            "from": previous,
+            "to": budget,
+            "reason": "post-run judge extension",
+        },
+    )
+    return previous
+
+
 async def judge(root, settings, *, limit=12, retry=False, provider=None):
     path = Path(root) / ".judge.lock"
     with path.open("a+") as lock:

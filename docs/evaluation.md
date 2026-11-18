@@ -88,6 +88,9 @@ plan默认不触网；real准备向量索引时可能访问配置的向量服务
 uv run python -m learning_agent.evaluation retrieval data/evaluations/my-run --real
 # 结构化裁判：会增加独立计费调用；出错不自动修复重发
 uv run python -m learning_agent.evaluation regrade data/evaluations/my-run --judge --limit 12
+# 全量复核时显式提高裁判预算（跑实验固化的 limits.judge 通常按抽样设置），
+# 扩展操作会以 limits-extension 记录进账目，可审计
+uv run python -m learning_agent.evaluation regrade data/evaluations/my-run --judge-budget 60 --judge --limit 60
 # 导入带reviewer_kind/reviewer/criteria/scores/reasons/evidence_refs的JSON复核列表
 uv run python -m learning_agent.evaluation regrade data/evaluations/my-run --reviews path/to/reviews.json
 uv run python -m learning_agent.evaluation compare data/evaluations/my-run --variants bm25 rrf
