@@ -123,12 +123,14 @@ def prepare(root, bindings, settings):
             mid,
             {"url": spec.get("source_url"), "start_seconds": spec.get("source_start_seconds", 0)},
         )
+        stored = store.material(sid, mid)
         assets[alias] = {
             "id": mid,
             "name": source.name,
+            "format": stored["format"],
             "source_start_seconds": spec.get("source_start_seconds", 0),
             "transcript_source": spec.get("transcript_source"),
-            "revision": store.material(sid, mid)["revision"],
+            "revision": stored["revision"],
             "source_bytes": source.stat().st_size,
             "source_modified_ns": source.stat().st_mtime_ns,
         }

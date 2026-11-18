@@ -1,0 +1,238 @@
+{
+  "id": "retrieval-component-v3",
+  "version": "3",
+  "queries": [
+    {
+      "id": "pre_zh",
+      "modality": "pdf",
+      "question": "CS336归一化放在子层之前，为何不影响残差直通？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            10,
+            11,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pre_en",
+      "modality": "pdf",
+      "question": "pre-norm main residual signal path LayerNorm",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            10,
+            11,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rms_definition",
+      "modality": "pdf",
+      "question": "RMSNorm分母里的范数与均方根定义",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            14
+          ]
+        }
+      ]
+    },
+    {
+      "id": "runtime",
+      "modality": "pdf",
+      "question": "为什么归一化浮点运算量少但耗时多？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            16
+          ]
+        }
+      ],
+      "annotation_evidence": "v3 移除了原 cs_video anchors=[859] 标注：cs336-prenorm.mp4 只覆盖原始视频 353-551 秒（source_start_seconds=353、时长 198 秒），859 无论按 clip 还是 original 基准都不可达；且该片讲 pre/post-norm，未涉及 FLOPs 与运行时间。原标注是永假条件，被 any() 断言语义掩盖。"
+    },
+    {
+      "id": "runtime_en",
+      "modality": "pdf",
+      "question": "FLOPs are not runtime memory movement",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            16
+          ]
+        }
+      ],
+      "annotation_evidence": "同 runtime：视频侧标注不可达且内容不符，已移除。"
+    },
+    {
+      "id": "double_norm",
+      "modality": "pdf",
+      "question": "残差分支前后都放LayerNorm但不在主干上",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            13
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gradient",
+      "modality": "pdf",
+      "question": "pre norm gradient stability larger learning rate",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            12,
+            19
+          ]
+        }
+      ]
+    },
+    {
+      "id": "regularization",
+      "modality": "pdf",
+      "question": "为什么正则化偏好简单模型？",
+      "expected": [
+        {
+          "asset": "optimization",
+          "pages": [
+            14,
+            15,
+            16
+          ]
+        }
+      ],
+      "annotation_evidence": "optimization.pdf p14 标题 Prefer Simpler Models；p15 正文“pushes against fitting the data too well”；p16 Occam’s razor"
+    },
+    {
+      "id": "matrix_scan",
+      "modality": "image",
+      "question": "矩阵乘法 A2x3 B3x4 结果的形状",
+      "expected": [
+        {
+          "asset": "worksheet",
+          "pages": [
+            1
+          ]
+        }
+      ],
+      "unretrievable": {
+        "reason": "worksheet.pdf 为纯图页，文字层为空，chunks=0",
+        "readable_by": "inspect_page 看图，不经文字检索"
+      }
+    },
+    {
+      "id": "dot_product",
+      "modality": "text",
+      "question": "英文笔记中内积和矩阵乘法的区别",
+      "expected": [
+        {
+          "asset": "notes"
+        }
+      ]
+    },
+    {
+      "id": "absent_gpu",
+      "modality": "none",
+      "question": "这门课程是否有我的4060上pre-norm的精确实测加速倍数？",
+      "expected": [],
+      "negative": true
+    },
+    {
+      "id": "absent_exam",
+      "modality": "none",
+      "question": "课程下次考试的个人座位号是什么？",
+      "expected": [],
+      "negative": true
+    },
+    {
+      "id": "video_opt_exception",
+      "modality": "video",
+      "question": "视频里说哪个模型是 pre-norm 的特例，它当时出了什么问题？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            70,
+            82
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 70.0-82.0 秒：“The one exception is OPT 350M… that was sort of orphaned when they were training. That was a fun find in my survey of architectures.” 关键词 orphan 仅见于本视频，PDF 与另一份讲义都没有，因此该查询只能由视频证据满足。目标区间落在 chunk 45-89 秒内。"
+    },
+    {
+      "id": "video_warmup",
+      "modality": "video",
+      "question": "讲者说 post-norm 训练不够稳定时，通常要配合什么做法？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            89,
+            99
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 89.0-99.0 秒：“if you wanted to use this post-norm stuff, it was much less stable. And so you would have to do some careful learning rate warm-up style things.” 连字符写法 warm-up 仅见于视频字幕，PDF 用 warmup。目标区间落在 chunk 89-130 秒内。"
+    },
+    {
+      "id": "video_cite_papers",
+      "modality": "video",
+      "question": "视频里讲者说支持 pre-norm 的两篇工作分别是谁的？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            102,
+            113
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 102.0-113.0 秒提到 “Salazar and Yen, and also this Shiong in 2020 paper”。视频转写把 Xiong 记成 Shiong，Yen 记成 Yuan/Yen 一类发音形式，属于视频独有拼写。目标区间落在 chunk 89-130 秒内。"
+    },
+    {
+      "id": "video_tool_example",
+      "modality": "video",
+      "question": "视频里举例的工具函数叫什么名字，它查什么？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            55,
+            70
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 55.1-70.7 秒：“有一个含试叫做Temperature，它可以查某个地点某个时间的温度…Temperature 夸耗台北某一段时间，它就会告诉你台北在这个时间的气温”。Temperature、台北、含试等词仅见于本视频，PDF 完全没有该内容。目标区间落在 chunk 44.8-88.7 秒内。"
+    },
+    {
+      "id": "video_prompt_kind",
+      "modality": "video",
+      "question": "给模型的工具使用说明在视频里被归为哪一种 prompt，举的查询例子问的是哪个城市？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            92,
+            102
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 92.3-102.0 秒：“查询使用调用这些工具的这段话 某年某月某日高雄气温 如何这个是User Port”。前文 84.5-88.7 秒指出这套说明叫 System Port（即 System Prompt）。高雄仅见于本视频。目标区间落在 chunk 88.7-114.8 秒内。"
+    }
+  ],
+  "supersedes": "2",
+  "change_note": "相对 v2 的三处修正与一处扩容，均由原片与原文字幕核对：(1) runtime / runtime_en 原带 cs_video anchors=[859]，而该视频只覆盖原始 353-551 秒、clip 时长 198 秒，859 在任何时间基准下都不可达，且该片段未讲 FLOPs 与运行时间——原标注是永假条件，被 any() 断言语义完全掩盖，v3 移除；(2) 每条查询新增 modality 字段，用于按证据模态分组统计，避免 PDF 命中掩盖视频/图片缺失；(3) 新增 5 条纯视频查询，标注目标只写视频资产，PDF 命中不算数，首次让视频检索具备独立可测指标。目标区间均落在单个 video chunk 的实际时间范围内，校验方式为“chunk 完整包含区间”。"
+}

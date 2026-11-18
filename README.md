@@ -273,6 +273,7 @@ notes/              自用设计、复盘与演示材料（不提交）
 | [长课程导入与后台任务](docs/long-course-design.md) | 分块上传、回放、ASR 与恢复 |
 | [长课程检索](docs/course-retrieval.md) | 分段、BM25/向量融合与验收结果 |
 | [检索对照实验](docs/retrieval.md) | BM25 vs 单语小模型 vs 多语言模型，逐题排名与取舍 |
+| [多模态评测](docs/multimodal-eval.md) | 分模态指标、两个被 any() 掩盖的标注缺陷、覆盖边界 |
 | [统一评测](docs/evaluation.md) | Dataset、评分、基线对比与结果表 |
 | [评测结果](docs/evaluation-results.md) | 自动路由与多模态基线的本机试点 |
 | [评测闭环](docs/evaluation-loop.md) | 真实迭代案例、质量门禁与不可比/复核不足的判定 |
