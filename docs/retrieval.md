@@ -88,6 +88,31 @@ BM25 命中：空                          ← 全空，向量是唯一出路
 doesn't affect the main residual signal"），118M 的多语言模型也拉不齐。
 这条给了明确的下一步：**rerank**（用交叉编码器对 top20 重排），而不是继续换更大的双塔模型。
 
+## 交叉编码器重排：补上了 pre_zh，也暴露了新的取舍（2026-11-18）
+
+`LA_RERANK_MODEL=BAAI/bge-reranker-base`（568M 参数，ONNX 1.04 GB，MIT）对融合后
+前 20 个候选逐对打分，只重排、不改变召回集合。同一语料、同一 17 题（`scripts/rerank_experiment.py`，
+走产品 `search` 路径实测）：
+
+| 模态 | hybrid Hit@5 | +rerank Hit@5 | hybrid MRR@5 | +rerank MRR@5 |
+|---|---|---|---|---|
+| pdf（8 题） | 0.62 | **0.88** | 0.542 | **0.688** |
+| video（5 题） | **1.00** | 0.80 | **0.557** | 0.567 |
+| text（1 题） | 1.00 | 1.00 | 1.000 | 1.000 |
+| **合计（14 题）** | 0.79 | **0.86** | 0.580 | **0.667** |
+
+逐题变化：**`pre_zh` 从不中 → 第 1**（交叉编码器逐对读 query 和原文，
+补上了双塔模型拉不齐的跨语言对齐）；`gradient`、`double_norm` 从不中进前 5；
+`video_opt_exception` 从第 4 升到第 1。代价同样真实：
+**`video_cite_papers` 从第 5 掉出前 5**（中文问英文字幕，重排模型也没拉齐），
+`runtime` 从第 3 掉出、`video_tool_example` 从 1 退到 2。
+
+**结论：收益是真的，代价也是真的，所以做成显式开关（`LA_RERANK_MODEL`，默认关）。**
+典型部署判断：问题以"中文问英文讲义"为主、且内存 ≥ 2 GB 时值得开；
+视频字幕类问题占比高或只有 1 GB 内存时别开。重排的另一个代价是每次查询
+多一轮逐对推理（1 核约 1–2 秒）。失败如实降级：`rerank_status=rerank_failed:*`，
+不冒充重排发生过。
+
 ## 实现要点
 
 - **双通道 + RRF 融合**，不做加权。BM25 分数无上界、余弦相似度在 [-1,1]，
@@ -144,6 +169,15 @@ uv run python scripts/retrieval_report.py \
 输出包含总体指标、分模态指标和逐题排名；`--model` 可换模型做同样的对照。
 若语料里缺某个标注资产，脚本会先警告"相关题目必然漏检"，
 避免把语料不匹配误读成模型不行。
+
+重排对照（走产品 `search` 路径，首次含模型下载约 1 GB）：
+
+```bash
+uv run python scripts/rerank_experiment.py
+```
+
+输出 baseline 与 rerank 两个配置的总体/分模态指标和逐题变化，
+原始数据留在 `data/evaluations/multimodal-v1/rerank-product-path.json`。
 
 ## 已知局限
 

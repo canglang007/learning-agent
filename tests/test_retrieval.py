@@ -206,3 +206,45 @@ def test_explicit_course_identifier_scopes_documents_without_title_boost():
     assert selected == chunks and ids == [] and query == "位置编码"
     # A course-directory query remains searchable instead of becoming an empty vector input.
     assert course_scope("CS336", chunks)[1] == "CS336"
+
+
+class FakeReranker:
+    """假交叉编码器：按关键词给分，验证重排只动顺序、失败如实降级。"""
+
+    def __init__(self, keyword, fail=False):
+        self.keyword, self.fail = keyword, fail
+
+    def scores(self, query, documents):
+        if self.fail:
+            from learning_agent.retrieval import RerankError
+
+            raise RerankError("rerank_failed:Fake")
+        return [
+            1.0 if self.keyword in doc else 0.0 + 0.001 * (-i)
+            for i, doc in enumerate(documents)
+        ]
+
+
+def test_rerank_reorders_candidates_and_degrades_honestly(tmp_path):
+    store = Store(tmp_path)
+    space = store.space("course")["id"]
+    # 两份材料都不含查询词（BM25 全空），词汇通道无法区分；重排器按关键词决定顺序
+    first = store.add_material(space, "a.md", "alpha beta gamma")
+    second = store.add_material(space, "b.md", "delta epsilon zeta")
+    config = Settings(_env_file=None, rerank_model="fake", rerank_candidates=2)
+    retriever = Retriever(store, config)
+    retriever.reranker = FakeReranker("epsilon")
+    result = retriever.search(space, "epsilon")
+    assert result["retrieval"] == "bm25+rerank"
+    assert result["rerank_status"] == "ready"
+    assert result["hits"][0]["id"] == second["id"]
+
+    retriever.reranker = FakeReranker("epsilon", fail=True)
+    result = retriever.search(space, "epsilon")
+    assert result["retrieval"] == "bm25"  # 降级不能冒充重排
+    assert result["rerank_status"] == "rerank_failed:Fake"
+
+    retriever.reranker = None
+    result = retriever.search(space, "epsilon")
+    assert result["retrieval"] == "bm25" and result["rerank_status"] == "disabled"
+    assert [h["id"] for h in result["hits"]] == [second["id"]]

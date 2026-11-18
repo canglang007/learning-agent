@@ -86,6 +86,56 @@ class EmbeddingError(Exception):
     pass
 
 
+class RerankError(Exception):
+    pass
+
+
+class Reranker:
+    """交叉编码器重排：对召回池逐对打分，只影响排序、不改变召回集合。
+
+    与 Embedder 同款惰性加载：未配置 ``rerank_model`` 时完全不 import
+    onnxruntime 相关路径，开启重排的部署才付出模型常驻的内存代价。
+    可注入假实现用于测试与评测对照。
+    """
+
+    def __init__(self, settings, engine=None):
+        self.settings = settings
+        self.model_name = settings.rerank_model
+        self._engine = engine
+        self._lock = threading.Lock()
+
+    def load(self):
+        try:
+            from fastembed.rerank.cross_encoder import TextCrossEncoder
+        except ImportError:
+            raise RerankError("rerank_unavailable:uv_sync_extra_embed") from None
+        cache = Path(self.settings.embedding_cache_dir or Path(self.settings.data_root) / "models")
+        cache.mkdir(parents=True, exist_ok=True)
+        try:
+            return TextCrossEncoder(
+                model_name=self.model_name,
+                cache_dir=str(cache),
+                threads=self.settings.embedding_threads or None,
+            )
+        except Exception as error:  # noqa: BLE001 - 下载失败、模型名写错、磁盘满都在这里
+            raise RerankError("rerank_load_failed:" + type(error).__name__) from None
+
+    def scores(self, query, documents):
+        try:
+            engine = self._engine
+            if engine is None:
+                with self._lock:
+                    if self._engine is None:
+                        self._engine = self.load()
+                engine = self._engine
+            return [float(s) for s in engine.rerank(query, list(documents))]
+        except RerankError:
+            raise
+        except Exception as error:  # noqa: BLE001 - onnxruntime/tokenizers 异常类型不统一
+            raise RerankError("rerank_failed:" + type(error).__name__) from None
+
+
+
 class Embedder:
     """把文本变成归一化向量。
 
@@ -472,6 +522,7 @@ class Retriever:
         self.settings = settings or Settings(_env_file=None)
         self.index = CourseIndex(store)
         self.embedder = embedder or Embedder(self.settings)
+        self.reranker = Reranker(self.settings) if self.settings.rerank_model else None
         self.lock = threading.Lock()
         self.jobs = {}
         self.queue = Jobs(store)
@@ -558,6 +609,29 @@ class Retriever:
                 if raise_errors:
                     raise
 
+    def apply_rerank(self, query, chunks, ranking):
+        """对候选池前 N 名做交叉编码器重排；失败时如实降级回原排序。
+
+        重排只决定"哪几个候选进前 5"，不扩大召回；返回 (新排序, 交叉编码器分数,
+        状态)。``rerank_status``：``off`` 未配置、``ready`` 已重排、
+        ``rerank_failed:*`` 降级原因——降级不能假装重排发生过。
+        """
+        if not self.reranker or self.settings.rerank_candidates <= 0:
+            return ranking, {}, "off" if not self.settings.rerank_model else "disabled"
+        pool = ranking[: self.settings.rerank_candidates]
+        if not pool:
+            return ranking, {}, "empty"
+        try:
+            scores = self.reranker.scores(query, [chunks[i]["excerpt"] for i in pool])
+        except RerankError as error:
+            return ranking, {}, str(error)
+        order = sorted(range(len(pool)), key=lambda j: (-scores[j], pool[j]))
+        return (
+            [pool[j] for j in order] + list(ranking[self.settings.rerank_candidates :]),
+            {pool[j]: scores[j] for j in range(len(pool))},
+            "ready",
+        )
+
     def search(self, space, query, material_id=None):
         chunks = self.index.chunks(space, material_id)
         chunks, search_query, scoped_ids = course_scope(query, chunks)
@@ -592,6 +666,9 @@ class Retriever:
                 except EmbeddingError as error:
                     dense_status = str(error)
         hits, per_page = [], Counter()
+        ranking, ce_scores, rerank_status = self.apply_rerank(search_query, chunks, ranking)
+        if ce_scores:
+            mode = mode + "+rerank"
         lexical_ranks = {i: rank for rank, i in enumerate(lexical, 1)}
         for i in ranking:
             chunk = chunks[i]
@@ -602,7 +679,7 @@ class Retriever:
             hits.append(
                 {
                     **chunk,
-                    "score": fused.get(i, scores[i]),
+                    "score": ce_scores.get(i, fused.get(i, scores[i])),
                     "bm25_rank": lexical_ranks.get(i),
                     "dense_rank": dense_ranks.get(i),
                 }
@@ -613,6 +690,7 @@ class Retriever:
             "hits": hits,
             "retrieval": mode,
             "dense_status": dense_status,
+            "rerank_status": rerank_status,
             "scope": {
                 "material_ids": scoped_ids,
                 "query": search_query,

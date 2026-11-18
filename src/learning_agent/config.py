@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     """``local`` 模式的推理线程数；0 表示交给 onnxruntime 按核数决定。"""
     embedding_cache_dir: str = ""
     """``local`` 模式的模型缓存目录；留空则用 ``LA_DATA_ROOT/models``。"""
+    rerank_model: str = ""
+    """交叉编码器重排模型（fastembed TextCrossEncoder，如 BAAI/bge-reranker-base）。
+    留空关闭。重排只作用于融合后的前 ``rerank_candidates`` 个候选，不改变召回集合；
+    多语言重排模型权重 1 GB 上下、每次查询多一轮逐对推理，1 GB 内存机器不要开启。"""
+    rerank_candidates: int = Field(default=20, ge=0, le=100)
 
     @model_validator(mode="after")
     def context_limits(self):
