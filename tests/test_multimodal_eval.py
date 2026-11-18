@@ -173,5 +173,5 @@ def test_learning_core_v2_suite_loads_through_schema():
         (ROOT / "evals" / "learning-core-v2.json").read_text(encoding="utf-8")
     )
     assert suite.id == "learning-core-v2"
-    assert suite.supersedes == "2"
+    assert suite.supersedes == "3"
     assert len(suite.cases) == 28

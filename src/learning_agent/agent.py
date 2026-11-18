@@ -367,7 +367,12 @@ async def run_turn(
                         manifest = input_manifest(prepared, context_step)
                         if isinstance(provider, OpenAIProvider):
                             request = provider.build_request(
-                                prepared.messages, instructions, tool_definitions, allow
+                                prepared.messages,
+                                instructions,
+                                # 预算削减可能紧缩了工具定义；最终请求必须用同一份，
+                                # 否则实测体积与削减估算不一致，固定大项凭空回来。
+                                prepared.tools if prepared.tools is not None else tool_definitions,
+                                allow,
                             )
                             actual = provider.estimate(request)
                             store.context_result(run_id, context_step, {"actual_estimate": actual})

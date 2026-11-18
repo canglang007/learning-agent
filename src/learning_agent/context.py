@@ -160,6 +160,9 @@ class PreparedContext:
     messages: list
     snapshot: dict
     asset_ids: set
+    # 预算削减可能把工具定义紧缩成"名称+一句话描述"；调用方构建最终请求必须用
+    # 同一份定义，否则实测 token 与削减后的估算不一致，固定大项会凭空回来。
+    tools: list | None = None
 
 
 class ContextManager:
@@ -394,10 +397,12 @@ class ContextManager:
             blocks = [b for b in blocks if b["kind"] != "summary"]
             omissions.append({"group_id": summary["id"], "reason": "summary_budget_pressure"})
             messages, estimate = measure()
+        compacted_tools = False
         if not fits(estimate) and tools:
             # 消息削减到头仍放不下：工具定义的完整 JSON schema 本身可达数千单元，
             # 是预算最紧时唯一的固定大项。紧缩为"名称 + 一句话描述"，参数由模型按
             # 惯例生成、运行时仍会按 ARGUMENTS 严格校验并返回可观察的错误。
+            compacted_tools = True
             tools = [
                 {
                     "name": t["name"],
@@ -417,4 +422,4 @@ class ContextManager:
                 snapshot(estimate),
             )
         assets = {a["asset_path"] for m in messages for a in m.get("attachments", [])}
-        return PreparedContext(messages, snapshot(estimate), assets)
+        return PreparedContext(messages, snapshot(estimate), assets, tools if compacted_tools else None)

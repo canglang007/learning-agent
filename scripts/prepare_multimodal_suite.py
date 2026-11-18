@@ -128,10 +128,19 @@ RELAXED_STEPS = {
 for case in suite["cases"]:
     if case["id"] in RELAXED_STEPS:
         case["settings"]["max_steps"] = 6
+# summary_recall：12k 预算下指令+工具固定开销（约14.2k）让多步回合必然失败；
+# 16k 下历史 15.4k 仍超输入预算 12928，摘要触发仍是通过该用例的必要条件。
+cases["summary_recall"]["settings"].update(
+    {
+        "context_budget_tokens": 16000,
+        "context_output_reserve_tokens": 2048,
+        "context_headroom_tokens": 1024,
+    }
+)
 
 suite["id"] = "learning-core-v2"
-suite["version"] = "3"
-suite["supersedes"] = "2"
+suite["version"] = "4"
+suite["supersedes"] = "3"
 suite["change_note"] = (
     "相对 v1 的多模态评测修正：(1) silent_video 原先没有 focus、"
     "语料里也不存在无字幕视频，answer 全靠文字，evidence_targets 为空——"
@@ -142,6 +151,9 @@ suite["change_note"] = (
     "v2 改为 optimization.pdf 第 51 页真实损失面示意图，要求 modality=image；"
     "(3) video_limit 补 forbidden_claims，把“编造 4060 实测倍数”列入复核项。"
     "(4) v3：取证链用例 max_steps 4→6（见 RELAXED_STEPS 注释）。"
+    "(5) v4：summary_recall 预算 12000→16000。2026-11-18 实测发现指令+完整工具"
+    "schema 固定开销约 14.2k 单元，12k 预算下多步回合在摘要触发后仍必然失败；"
+    "16k（输入预算 12928）下 8 条注入历史 15.4k 仍超预算，摘要依然是必要条件。"
 )
 Path("evals/learning-core-v2.json").write_text(
     json.dumps(suite, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
