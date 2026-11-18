@@ -394,6 +394,21 @@ class ContextManager:
             blocks = [b for b in blocks if b["kind"] != "summary"]
             omissions.append({"group_id": summary["id"], "reason": "summary_budget_pressure"})
             messages, estimate = measure()
+        if not fits(estimate) and tools:
+            # 消息削减到头仍放不下：工具定义的完整 JSON schema 本身可达数千单元，
+            # 是预算最紧时唯一的固定大项。紧缩为"名称 + 一句话描述"，参数由模型按
+            # 惯例生成、运行时仍会按 ARGUMENTS 严格校验并返回可观察的错误。
+            tools = [
+                {
+                    "name": t["name"],
+                    "description": t["description"].split("。")[0],
+                }
+                for t in tools
+            ]
+            omissions.append(
+                {"group_id": "tool_definitions", "reason": "tools_schema_budget_pressure"}
+            )
+            messages, estimate = measure()
         if not fits(estimate):
             raise ContextError(
                 "context_required_too_large",

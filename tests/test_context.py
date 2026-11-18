@@ -17,13 +17,16 @@ from learning_agent.tools import MaterialTools
 
 
 def small_settings(tmp_path, **changes):
-    return Settings(
-        _env_file=None,
-        data_root=tmp_path,
+    defaults = dict(
         context_budget_tokens=18000,
         context_output_reserve_tokens=512,
         context_headroom_tokens=512,
-        **changes,
+    )
+    defaults.update(changes)
+    return Settings(
+        _env_file=None,
+        data_root=tmp_path,
+        **defaults,
     )
 
 
@@ -384,3 +387,27 @@ def test_context_settings_validate_protocol_output_field_and_picture_capacity(tm
     settings = small_settings(tmp_path, output_token_field="max_completion_tokens")
     request = OpenAIProvider(settings).build_request([], "", [])
     assert request.payload["max_completion_tokens"] == 512
+
+
+def test_tool_schemas_are_compacted_when_fixed_overhead_exceeds_budget(tmp_path):
+    """预算小于"指令+完整工具schema"时，紧缩工具定义而不是整个回合失败。
+
+    v2 全量评测的 summary_recall（12k 预算、指令+工具 ≈14.2k）在历史全部
+    省略后仍然硬失败——固定大项此前从不参与削减。
+    """
+    client, model, _, _, conv = setup(
+        tmp_path,
+        [
+            {"role": "assistant", "content": "old" * 40000},
+            {"role": "assistant", "content": "新的讲解"},
+        ],
+    )
+    close_for(tmp_path)
+    client = TestClient(create_app(small_settings(tmp_path, context_budget_tokens=11000), model))
+    url = f"/api/conversations/{conv['id']}/messages"
+    client.post(url, json={"content": "旧问题"})
+    second = client.post(url, json={"content": "新问题"}).json()
+    assert second["state"] == "completed"
+    contexts = client.get(f"/api/runs/{second['run_id']}/context").json()
+    omissions = [o["reason"] for c in contexts for o in c.get("omissions", [])]
+    assert "tools_schema_budget_pressure" in omissions
