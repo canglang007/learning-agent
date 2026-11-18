@@ -145,6 +145,40 @@ uv run python scripts/prepare_multimodal_suite.py
 能力用例（`learning-core-v2.json`，28 cases / 56 turns）需要真实模型调用，
 用 `python -m learning_agent.evaluation` 跑，会产生 LLM 费用，与检索评测分开执行。
 
+## 能力评测真跑结果（2026-11-18，gpt-6-sol，56 turns 全量）
+
+完整账目在 `data/evaluations/multimodal-agent-v2-full/`（commit `db395a9`，
+不随仓库分发）。56 个 turn 全部发出：**47 完成、7 预算耗尽、1 运行失败**；
+主模型 94 次请求、51.6 万 tokens；9/9 图像证据检查全部通过。
+
+**多模态核心用例全绿**——这些是本次补强的重点，全部完成了"真的看了"的证据闭环：
+
+| 用例 | 结果 | 证据 |
+|---|---|---|
+| `silent_video` | 完成，证据 pass | `inspect_media` 取了 00:08/00:15/00:22 三帧（落在 5–25 s 要求区间），答案把"画面观察"与"推测"分开写，明确标注无声无字幕 |
+| `zh_chart` | 完成，证据 pass | 打开第 51 页图，答出陡峭方向抖动/平缓方向慢、条件数根源 |
+| `matrix_shapes` | 完成，证据 pass | 纯图 PDF 页（文字层为空）看图答题 |
+| `video_joint` | 完成，证据 pass | PDF 页图 + 视频帧混合证据 |
+| `prenorm` | 完成，证据 pass | 第 10 页图 + 视频片段 |
+| `rms_notation` / `feedback_regularization` / `conflict_notes` | 完成，证据 pass | — |
+
+**7 个预算耗尽的 turn 是同一个模式**：用例设定 `max_steps=4`，代理把 4 步全花在
+`list_materials → search → search → inspect_*` 的取证链上，没轮到 `deliver_explanation`。
+集中在检索/定位类问题（`retrieve_runtime`、`retrieve_residual`、`retrieve_english_note`、
+`zh_tool_loop`、`feedback_norm`、`source_injection`、`clarify_reference` 的追问）。
+这是用例步数上限与真实取证开销的矛盾，不是工具故障（101 次工具调用 0 失败）；
+要么放宽这几条的 `max_steps`，要么教代理"取证到点即交付"。
+
+**1 个运行失败值得单独说**：`summary_recall`（上下文摘要用例）在第一次模型请求前就
+因"超过上下文预算"直接 `run_failed`，0 步执行——用例注入了超长合成历史并开
+`enable_context_summary=true`，但摘要只在"预算压力与新的覆盖范围同时满足"时触发，
+首回合没有新覆盖范围，于是预算检查先于摘要生效，整个 turn 没能开始。
+这是一个真实的产品边界：**摘要机制救不了"第一句话就超预算"的会话**。
+
+另外发现两处工程口径问题并已修：`--max-turns` 是全实验 turn 预算而非单 case 上限、
+`limits.main_model` 是全实验模型请求预算（默认 48 次在 25 个 turn 左右耗尽），
+跑全量需要显式给足（本次 `--max-turns 60 --max-main-attempts 200`）。
+
 ## 已知局限
 
 - 纯视频题只有 5 条，1 条失败就差 0.2；`video_cite_papers` 命中在第 5 名，
