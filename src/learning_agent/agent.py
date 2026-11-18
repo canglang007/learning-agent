@@ -276,12 +276,20 @@ async def run_turn(
                                 + LEARNING_GUIDANCE
                                 + f"\n本轮剩余图像预算：{settings.max_images_per_turn - images_used}张；PDF和视频共享。视频frame_count可选1到3，按问题需要选择并为其他图像留预算。"
                                 + (
-                                    "\n预算已用完，请根据现有信息交付，并说明未完成部分。"
+                                    "\n本步是本回合最后一步：工具已不可用。"
+                                    "基于已取得的观察直接以正文回答，明确说明尚未完成的部分；"
+                                    "不要再尝试检索或查看。"
                                     if not allow
                                     else ""
                                 )
                             )
-                            tool_definitions = definitions(settings.enable_vision)
+                            if allow:
+                                tool_definitions = definitions(settings.enable_vision)
+                            else:
+                                # 最后一步不提供工具：评测实测（v2 全量）显示仅靠提示语，
+                                # 模型在最后一步仍会继续调工具导致整体耗尽；而运行时对
+                                # 预算用尽后的工具调用一律拒绝，唯一出口是正文交付。
+                                tool_definitions = []
                         else:
                             allow = True
                             tool_definitions = []

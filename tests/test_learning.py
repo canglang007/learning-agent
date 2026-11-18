@@ -38,9 +38,9 @@ class Scripted:
         return item, {"total_tokens": 10}
 
 
-def setup(tmp_path, responses):
-    model = Scripted(responses)
-    settings = Settings(_env_file=None, data_root=tmp_path)
+def setup(tmp_path, responses, *, model=None, **settings_changes):
+    model = model if model is not None else Scripted(responses)
+    settings = Settings(_env_file=None, data_root=tmp_path, **settings_changes)
     close_for(tmp_path)
     client = TestClient(create_app(settings, model))
     space = client.post("/api/spaces", json={"content": "学习"}).json()
@@ -290,3 +290,41 @@ def test_same_conversation_rejects_overlapping_requests(tmp_path):
             assert len((await client.get(url)).json()) == 2
 
     asyncio.run(exercise())
+
+
+def test_final_step_only_offers_delivery_tool(tmp_path):
+    """最后一步不提供工具：评测实测显示仅靠提示语，模型仍会在最后一步继续调工具。"""
+
+    class Recording(Scripted):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.calls = []
+
+        async def step(self, history, instructions, tools, allow_tools):
+            self.calls.append(
+                {"instructions": instructions, "tools": [t["name"] for t in tools]}
+            )
+            return await super().step(history, instructions, tools, allow_tools)
+
+    recorder = Recording([])
+    client, model, _space, material, conv = setup(tmp_path, [], model=recorder, max_steps=4)
+    model.responses = [
+        call("search_materials", {"query": "近似"}, "c1"),
+        call("list_materials", {}, "c2"),
+        call(
+            "read_passage",
+            {"material_id": material["id"], "start_line": 1, "end_line": 2},
+            "c3",
+        ),
+        {"role": "assistant", "content": "近似需要明确误差条件；尚未完成的部分：未核对视频讲解。"},
+    ]
+    result = client.post(
+        f"/api/conversations/{conv['id']}/messages", json={"content": "解释笔记"}
+    ).json()
+    assert result["state"] == "budget_exhausted"
+    assert "近似需要明确误差条件" in result["answer"]
+    assert len(model.calls) == 4
+    assert "search_materials" in model.calls[0]["tools"]
+    final = model.calls[-1]
+    assert final["tools"] == []
+    assert "最后一步" in final["instructions"]
