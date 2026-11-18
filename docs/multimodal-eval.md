@@ -235,8 +235,11 @@ v4（suite version=4，commit `e8ef9d0`，gpt-6-sol，56 回合全量，
   修复：judge 复核输入注入 `summary_evidence`（按 input_ref 的 summary_id
   从 trial workspace 读摘要条目），指令明确"引用摘要 user_quote 属于有据
   引用"；新增测试 `test_summary_evidence_exposes_quoted_context_to_the_judge`。
-  网关复检时不可达（连管理页都超时），修复后 judge 对该回合的复核意见
-  暂缺，补跑与重评留待网关恢复。
+  **已闭环验证**（patch 目录 `multimodal-agent-v4-patch-summary5`，旧 key 恢复
+  后补跑）：同用例重跑 → summary 触发、模型如实引用摘要条目（含 source_run_ids
+  溯源）并主动声明"只能依据二手摘要确认"；修复后 judge 重评 explain 回合
+  criteria pass、serious_error 转 False（followup 全 3 分 pass），复核记录中
+  可见 judge 输入确实携带 `summary_evidence`。
 
 ## 已知局限
 
