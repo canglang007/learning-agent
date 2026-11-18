@@ -1,6 +1,6 @@
 {
  "id": "learning-core-v2",
- "version": "2",
+ "version": "3",
  "rubric_version": "1",
  "cases": [
   {
@@ -348,7 +348,7 @@
     "media"
    ],
    "settings": {
-    "max_steps": 4,
+    "max_steps": 6,
     "enable_context_summary": false
    },
    "turns": [
@@ -449,7 +449,7 @@
     "retrieval"
    ],
    "settings": {
-    "max_steps": 4,
+    "max_steps": 6,
     "enable_context_summary": false
    },
    "turns": [
@@ -490,7 +490,7 @@
     "retrieval"
    ],
    "settings": {
-    "max_steps": 4,
+    "max_steps": 6,
     "enable_context_summary": false
    },
    "turns": [
@@ -531,7 +531,7 @@
     "retrieval"
    ],
    "settings": {
-    "max_steps": 4,
+    "max_steps": 6,
     "enable_context_summary": false
    },
    "turns": [
@@ -572,7 +572,7 @@
     "feedback"
    ],
    "settings": {
-    "max_steps": 4,
+    "max_steps": 6,
     "enable_context_summary": false
    },
    "turns": [
@@ -1120,7 +1120,7 @@
     "conflict"
    ],
    "settings": {
-    "max_steps": 4,
+    "max_steps": 6,
     "enable_context_summary": false
    },
    "turns": [
@@ -1161,7 +1161,7 @@
     "conflict"
    ],
    "settings": {
-    "max_steps": 4,
+    "max_steps": 6,
     "enable_context_summary": false
    },
    "turns": [
@@ -1391,6 +1391,6 @@
    ]
   }
  ],
- "supersedes": "1",
- "change_note": "相对 v1 的多模态评测修正：(1) silent_video 原先没有 focus、语料里也不存在无字幕视频，answer 全靠文字，evidence_targets 为空——v2 新增真实无声视频资产 cs336-prenorm-silent.mp4（从 cs336-prenorm.mp4 20-50 秒裁出、去除音轨、30 秒），该资产 chunks=0 文字检索不可达，只能 inspect_media 看帧，并要求图像帧落在 5-25 秒，未看图即失败；(2) zh_chart 原先没有 focus、问的是语料里不存在的训练/验证损失曲线，v2 改为 optimization.pdf 第 51 页真实损失面示意图，要求 modality=image；(3) video_limit 补 forbidden_claims，把“编造 4060 实测倍数”列入复核项。"
+ "supersedes": "2",
+ "change_note": "相对 v1 的多模态评测修正：(1) silent_video 原先没有 focus、语料里也不存在无字幕视频，answer 全靠文字，evidence_targets 为空——v2 新增真实无声视频资产 cs336-prenorm-silent.mp4（从 cs336-prenorm.mp4 20-50 秒裁出、去除音轨、30 秒），该资产 chunks=0 文字检索不可达，只能 inspect_media 看帧，并要求图像帧落在 5-25 秒，未看图即失败；(2) zh_chart 原先没有 focus、问的是语料里不存在的训练/验证损失曲线，v2 改为 optimization.pdf 第 51 页真实损失面示意图，要求 modality=image；(3) video_limit 补 forbidden_claims，把“编造 4060 实测倍数”列入复核项。(4) v3：取证链用例 max_steps 4→6（见 RELAXED_STEPS 注释）。"
 }

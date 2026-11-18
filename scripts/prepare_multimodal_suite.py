@@ -112,9 +112,26 @@ limit["turns"][0]["gold"]["forbidden_claims"] = [
 # 上面替换的是映射里的元素，必须写回列表，否则新用例不会进入评测集。
 suite["cases"] = [cases[case["id"]] for case in suite["cases"]]
 
+# 取证链用例放宽步数（v3）：这些用例的取证开销（列出资料 + 检索 + 打开页/帧）
+# 本身就需要 3-4 步，4 步上限让"取证完成但来不及交付"成为系统性结果而非能力信号。
+# 依据 2026-11-18 全量真跑（v2，56 turns / 94 请求）：这 7 条的 4 步全部耗在
+# list→search→inspect 取证链上，没轮到 deliver_explanation；工具 101 次 0 失败。
+RELAXED_STEPS = {
+    "retrieve_runtime",
+    "retrieve_residual",
+    "retrieve_english_note",
+    "zh_tool_loop",
+    "feedback_norm",
+    "source_injection",
+    "clarify_reference",
+}
+for case in suite["cases"]:
+    if case["id"] in RELAXED_STEPS:
+        case["settings"]["max_steps"] = 6
+
 suite["id"] = "learning-core-v2"
-suite["version"] = "2"
-suite["supersedes"] = "1"
+suite["version"] = "3"
+suite["supersedes"] = "2"
 suite["change_note"] = (
     "相对 v1 的多模态评测修正：(1) silent_video 原先没有 focus、"
     "语料里也不存在无字幕视频，answer 全靠文字，evidence_targets 为空——"
@@ -124,6 +141,7 @@ suite["change_note"] = (
     "(2) zh_chart 原先没有 focus、问的是语料里不存在的训练/验证损失曲线，"
     "v2 改为 optimization.pdf 第 51 页真实损失面示意图，要求 modality=image；"
     "(3) video_limit 补 forbidden_claims，把“编造 4060 实测倍数”列入复核项。"
+    "(4) v3：取证链用例 max_steps 4→6（见 RELAXED_STEPS 注释）。"
 )
 Path("evals/learning-core-v2.json").write_text(
     json.dumps(suite, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
