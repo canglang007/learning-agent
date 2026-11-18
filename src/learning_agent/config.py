@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     留空关闭。重排只作用于融合后的前 ``rerank_candidates`` 个候选，不改变召回集合；
     多语言重排模型权重 1 GB 上下、每次查询多一轮逐对推理，1 GB 内存机器不要开启。"""
     rerank_candidates: int = Field(default=20, ge=0, le=100)
+    rerank_ce_weight: float = Field(default=0.9, ge=0, le=1)
+    """重排排序中 CE 概率的权重：分数 = w*sigmoid(CE) + (1-w)*归一化RRF。
+    1.0 为纯 CE 替换——17 题逐题对照显示它会把转述型查询（词面与目标重叠少）
+    的目标挤出前 5；0.85–0.9 的分数空间融合 14 题可评分用例 hit@5 全中。
+    低于 1 时 CE 置信度接近的候选由 RRF 托底定序。"""
 
     @model_validator(mode="after")
     def context_limits(self):

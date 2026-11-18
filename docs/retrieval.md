@@ -113,6 +113,34 @@ doesn't affect the main residual signal"），118M 的多语言模型也拉不�
 多一轮逐对推理（1 核约 1–2 秒）。失败如实降级：`rerank_status=rerank_failed:*`，
 不冒充重排发生过。
 
+## 重排排序：纯替换 → 分数空间融合（2026-11-19）
+
+逐题复盘推翻了"按查询语言分流"的直觉：受损 3 题（`runtime`、`video_cite_papers`、
+`video_tool_example`）与受益题**都是中文查询**，退化与语言无关，而与
+**查询-目标的词面重叠**有关——转述型查询（"耗时多""两篇工作是谁"）的目标
+片段措辞与查询几乎不重叠，CE 置信度区分不开时被词面接近的干扰项挤掉。
+
+三种排序策略对照（同一语料、同一 17 题、产品 `search` 路径，
+`scripts/rerank_fusion_experiment.py`）：
+
+| 策略 | Hit@5 | MRR@5 |
+|---|---|---|
+| hybrid RRF（无重排） | 0.786 | 0.580 |
+| 纯 CE 替换（`rerank_ce_weight=1.0`） | 0.857 | 0.667 |
+| **分数空间融合（`rerank_ce_weight=0.9`，默认）** | **1.000** | **0.705** |
+
+融合公式：`score = w·sigmoid(CE) + (1-w)·归一化RRF`。CE 高分饱和（都 >0.99）
+后概率差微乎其微，RRF 位次差相对变大，转述型查询的目标由 RRF 托底保住；
+CE 分差显著时 sigmoid 接近线性，融合跟随 CE——`pre_zh` 仍第 1、
+`video_opt_exception` 仍第 1，同时 `runtime` 保住第 3、`video_cite_papers`
+保住第 5。逐题**没有任何用例比纯替换更差**。
+
+位次空间的加权 RRF 融合试过（alpha 扫描 0.2–0.8）救不回受损题且 MRR 更低
+（≤0.621）；分数空间是正确的作用域。权重在 0.85–0.9 达到 hit@5 全中——
+如实声明：这是在 14 题可评分用例上选的参数，样本小，更大查询集上需复核。
+单元测试 `test_fuse_ce_with_rrf_saturation_tiebreak_and_replace_mode`
+锁定饱和托底与 `1.0` 纯替换两种行为。
+
 ## 实现要点
 
 - **双通道 + RRF 融合**，不做加权。BM25 分数无上界、余弦相似度在 [-1,1]，

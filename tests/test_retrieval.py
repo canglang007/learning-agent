@@ -248,3 +248,18 @@ def test_rerank_reorders_candidates_and_degrades_honestly(tmp_path):
     result = retriever.search(space, "epsilon")
     assert result["retrieval"] == "bm25" and result["rerank_status"] == "disabled"
     assert [h["id"] for h in result["hits"]] == [second["id"]]
+
+
+def test_fuse_ce_with_rrf_saturation_tiebreak_and_replace_mode():
+    """CE 高分饱和（都>0.99）时由 RRF 托底定序；weight=1.0 退化为纯 CE 替换。"""
+    from learning_agent.retrieval import fuse_ce_with_rrf
+
+    # 池 [0,1]：CE 想要 1 在前，但两个分数都处于 sigmoid 饱和区（prob 差 ~0.0003），
+    # RRF 位次差（1/61 vs 1/62）相对更大——融合应保住原序 [0,1]。
+    assert fuse_ce_with_rrf([8.0, 10.0], [0, 1], weight=0.9) == [0, 1]
+    # CE 分差显著且未饱和：融合跟随 CE。
+    assert fuse_ce_with_rrf([0.0, 3.0], [0, 1], weight=0.9) == [1, 0]
+    # weight=1.0 与旧纯替换行为完全一致。
+    assert fuse_ce_with_rrf([8.0, 10.0], [0, 1], weight=1.0) == [1, 0]
+    # weight=0 保留 RRF 原序（此时不应配置重排，仅为边界完备性）。
+    assert fuse_ce_with_rrf([3.0, 0.0], [0, 1], weight=0.0) == [0, 1]
