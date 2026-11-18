@@ -198,6 +198,11 @@ uv run python scripts/prepare_multimodal_suite.py
   摘要依然是必要条件。真跑验证：explain 从摘要原话回忆出目标并诚实标注
   "依据摘要引文、未能重新核实"，followup 正确吸收纠正。
 - **指令本身 6.3k 单元是新的最大固定开销**，是后续上下文工程的第一优先级。
+  **已压缩（2026-11-19）**：INSTRUCTIONS+LEARNING_GUIDANCE 逐条对照重写，
+  每一条行为约束（引用格式、诚实语义、学习状态规则）都保留，只合并表述——
+  2384→1904 字，指令实测 6480→5076 单元（-22%），指令+完整工具 schema 固定开销
+  14324→12920。新增守护测试 `test_instructions_stay_within_fixed_overhead_budget`
+  （上限 5500），防止指令无序回涨；质量影响由 learning-core-v4 全量重跑验证。
 
 工程口径教训（已写进使用方式）：`--max-turns` 是全实验 turn 预算、
 `limits.main_model` 是全实验请求预算，全量跑需显式给足；

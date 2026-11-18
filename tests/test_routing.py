@@ -100,6 +100,29 @@ def test_instructions_require_material_id_lookup_before_reading():
     assert "别拿文件名或猜的ID去试" in INSTRUCTIONS
 
 
+def test_instructions_stay_within_fixed_overhead_budget():
+    """指令是每个模型请求都要重发的最大固定项之一：表述压缩不许悄悄回涨。
+
+    上限按 utf8-proxy-v1 估算（含每回合动态拼接的图像预算注记），
+    当前实测约 5100；收紧指令时应同步下调这个数。
+    """
+    from learning_agent.agent import INSTRUCTIONS
+    from learning_agent.config import Settings
+    from learning_agent.learning import LEARNING_GUIDANCE
+    from learning_agent.provider import OpenAIProvider
+
+    settings = Settings(_env_file=None, access_token="", data_root="/tmp/la-probe")
+    provider = OpenAIProvider(settings)
+    instructions = (
+        INSTRUCTIONS
+        + "\n"
+        + LEARNING_GUIDANCE
+        + "\n本轮剩余图像预算：4张；PDF和视频共享。视频frame_count可选1到3，按问题需要选择并为其他图像留预算。"
+    )
+    request = provider.build_request([], instructions, [], True, encode_images=False)
+    assert provider.estimate(request)["text_units"] <= 5500
+
+
 def test_auto_route_direct_uses_no_tools_and_records_route(tmp_path):
     close_for(tmp_path)
     model = Plain("近似需要说明误差条件。")
