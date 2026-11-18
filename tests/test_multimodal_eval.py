@@ -162,3 +162,16 @@ def test_learning_core_v2_gives_multimodal_cases_real_targets():
     assert chart["input"]["focus"]["page"] == 51
 
     assert cases["video_limit"]["turns"][0]["gold"]["forbidden_claims"]
+
+
+def test_learning_core_v2_suite_loads_through_schema():
+    """评测集必须能被 Suite schema 加载；版本溯源字段不能让整个文件读不进来。"""
+
+    from learning_agent.evaluation.schemas import Suite
+
+    suite = Suite.model_validate_json(
+        (ROOT / "evals" / "learning-core-v2.json").read_text(encoding="utf-8")
+    )
+    assert suite.id == "learning-core-v2"
+    assert suite.supersedes == "1"
+    assert len(suite.cases) == 28

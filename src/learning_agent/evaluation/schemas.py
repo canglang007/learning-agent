@@ -75,6 +75,9 @@ class Suite(Spec):
     version: str = "1"
     rubric_version: str = "1"
     cases: list[Case] = Field(min_length=1)
+    # 版本溯源：替代哪个旧版本、为什么改。只做记录，不参与计划与评分。
+    supersedes: str | None = None
+    change_note: str | None = None
 
     @model_validator(mode="after")
     def identities(self):
