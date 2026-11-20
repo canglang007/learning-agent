@@ -240,7 +240,6 @@ v4（suite version=4，commit `e8ef9d0`，gpt-6-sol，56 回合全量，
   溯源）并主动声明"只能依据二手摘要确认"；修复后 judge 重评 explain 回合
   criteria pass、serious_error 转 False（followup 全 3 分 pass），复核记录中
   可见 judge 输入确实携带 `summary_evidence`。
-
 ## 已知局限
 
 - 纯视频题只有 5 条，1 条失败就差 0.2；`video_cite_papers` 命中在第 5 名，

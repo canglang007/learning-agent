@@ -151,4 +151,4 @@ uv run python examples/evaluate_streaming.py --real \
 
 ## 评测与启动补充
 
-[统一评测](evaluation.md)现记录每次主模型attempt的实际输入清单，并可选使用独立预算账目；不改变普通问答的工具决策。运行策略版本升级为learning-loop-v3，旧待处理任务若策略不兼容会明确中断，已有完成答案保留。数据库短事务采用进程内可重入锁规避本地SQLite并发连接生命周期死锁。API与媒体worker可由[统一入口](demo-demo.md)启动和共同结束。
+[统一评测](evaluation.md)现记录每次主模型attempt的实际输入清单，并可选使用独立预算账目；不改变普通问答的工具决策。运行策略版本升级为learning-loop-v3，旧待处理任务若策略不兼容会明确中断，已有完成答案保留。数据库短事务采用进程内可重入锁规避本地SQLite并发连接生命周期死锁。API与媒体worker可由[统一入口](demo.md)启动和共同结束。

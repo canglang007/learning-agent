@@ -206,7 +206,6 @@ uv run python scripts/rerank_experiment.py
 
 输出 baseline 与 rerank 两个配置的总体/分模态指标和逐题变化，
 原始数据留在 `data/evaluations/multimodal-v1/rerank-product-path.json`。
-
 ## 已知局限
 
 - 10 条有效样本量很小，0.60 与 0.70 的差距在统计上没有意义；结论只在"向量通道有用"
