@@ -73,8 +73,19 @@ class Settings(BaseSettings):
     """``local`` 模式的模型缓存目录；留空则用 ``LA_DATA_ROOT/models``。"""
     rerank_model: str = ""
     """交叉编码器重排模型（fastembed TextCrossEncoder，如 BAAI/bge-reranker-base）。
-    留空关闭。重排只作用于融合后的前 ``rerank_candidates`` 个候选，不改变召回集合；
-    多语言重排模型权重 1 GB 上下、每次查询多一轮逐对推理，1 GB 内存机器不要开启。"""
+    留空关闭；``.env.example`` 与 ``start.sh`` 默认开启。
+
+    实测（v5，7 讲 942 块、83 道可评分题）：
+
+    - 混合检索 Hit@5 0.548 → 加精排 **0.714**，MRR 0.394 → 0.564；
+      any 类题 0.575 → 0.750；
+    - 不开向量、只给 BM25 候选加精排是 0.524——精排不能替代向量召回，
+      两者各管一段；
+    - 代价：权重约 1.1 GB（首次使用要下载），单次查询多约 0.9 秒
+      （默认 20 个候选逐对推理，CPU）。内存紧或网速差的机器保持留空。
+
+    重排只作用于融合后的前 ``rerank_candidates`` 个候选，不改变召回集合。
+    """
     rerank_candidates: int = Field(default=20, ge=0, le=100)
     rerank_ce_weight: float = Field(default=0.9, ge=0, le=1)
     """重排排序中 CE 概率的权重：分数 = w*sigmoid(CE) + (1-w)*归一化RRF。
