@@ -22,7 +22,7 @@ work = Path(tempfile.mkdtemp(prefix="rerank-sweep-"))
 shutil.copy("data/evaluations/multimodal-v1/corpus/workspace.db", work / "workspace.db")
 store = Store(work)
 space = store.spaces()[0]["id"]
-queries = json.loads(Path("evals/retrieval-v3.json").read_text(encoding="utf-8"))["queries"]
+queries = json.loads(Path("evals/retrieval-v4.json").read_text(encoding="utf-8"))["queries"]
 
 from scripts.retrieval_report import load_assets
 

@@ -1,6 +1,6 @@
 # 多模态评测：覆盖范围、两个标注缺陷与分模态指标
 
-更新于：2026-11-18。这份文档回答一个问题：**这个项目的多模态能力到底被测了多少，
+更新于：2026-11-23。这份文档回答一个问题：**这个项目的多模态能力到底被测了多少，
 哪些是真测的、哪些只是看起来测了。**
 
 ## 一句话结论
@@ -10,28 +10,54 @@
 补上纯视频查询与图像证据门槛后，视频检索第一次有了独立数字：**BM25 Hit@5 0.40 →
 混合检索 1.00**（5 条纯视频题）。
 
+但这个 1.00 站不住：视频资产是两段两三分钟的切片，只有 6 个分块，"从三块里找一块"
+本来就该满分。换成两讲完整原片（87 分钟 + 102 分钟，265 个视频分块）后，17 题扩到
+53 题，视频检索的真实水平是 **BM25 0.56 → 混合 0.74 → 加精排 0.89**，
+全量三档是 **0.57 → 0.65 → 0.84**。下面先给构成，再给这两组数。
+
 ## 语料构成
 
-评测语料在 `data/evaluations/multimodal-v1/`，7 份材料：
+评测语料在 `data/evaluations/multimodal-v1/`，6 份材料（只放被题目用到的材料）：
 
 | 资产 | 格式 | 规模 | 可文字检索 | 说明 |
 |---|---|---|---|---|
 | cs336-architecture.pdf | pdf | 68 页 / 69 chunk | 是 | 英文讲义，含架构图页 |
 | optimization.pdf | pdf | 119 页 / 131 chunk | 是 | 英文讲义，含损失面示意图 |
-| cs336-prenorm.mp4 | video | 198 s / 3 chunk | 是（英文字幕） | 原始视频 353–551 s 片段 |
-| ntu-tool-use.mp4 | video | 270 s / 3 chunk | 是（中文字幕） | 原始视频 3030–3300 s 片段 |
-| **cs336-prenorm-silent.mp4** | video | 30 s / **0 chunk** | **否** | 去音轨，无字幕，只能看图 |
+| cs336-lecture.mp4 | video | **87 分钟 / 121 chunk** | 是（本地 ASR 英文） | 整讲原片，1876 条字幕段 |
+| ntu-lecture.mp4 | video | **102 分钟 / 144 chunk** | 是（官方中文字幕） | 整讲原片，2608 条字幕段 |
 | worksheet.pdf | pdf | 1 页 / **0 chunk** | **否** | 纯图页，文字层为空 |
 | study-notes.md | text | 2 chunk | 是 | 英文笔记 |
 
-两点值得注意：
+三点值得注意：
 
-1. **PDF 的 chunk 数是视频的 33 倍**（200 : 6）。视频按 40–45 秒切块，一个讲解单元一块；
-   PDF 按页切。这个粒度差不是 bug，但决定了视频不可能有页级的定位精度。
-2. **两份"不可文字检索"的材料**是刻意保留的：它们把"看图的通路"单独隔离出来，
-   否则图片能力永远会被文字检索的成功掩盖。
+1. **粒度差反过来了**：v3 时 PDF 分块是视频的 33 倍（200 : 6），看起来视频不可能有
+   定位精度；换成整讲后视频占 265 / 467 = **57%**，反而变成"视频块把讲义页挤出去"
+   ——同一个事实在幻灯片和讲稿里各出现一次，是这套语料最需要小心的性质。
+2. **视频按 40–45 秒切块，切点会落在句子中间**。`video_sliding_window` 那条的漏检
+   就是定义句被切成两半，含后半句的块开头是 "to a small region around…"，语义残缺。
+3. **只有 `worksheet.pdf` 是"不可文字检索"的材料**（文字层为空、0 分块），
+   它对应 `matrix_scan` 那条题并标了 `unretrievable`，单列不进分母——拿文字检索
+   去命中纯图页是不可能的事，算成失败是用错误的标准判分。
+   无声视频不在检索语料里：它在检索题上没有任何目标，放进去不会产生任何指标，
+   只会在读语料清单时被误当成"图片能力被测过"的证据。它作为输入类型由能力用例
+   （`learning-core-v4.json` 的 `silent_video`，经 `bindings.local.json` 绑定）覆盖。
 
-## 分模态指标（`evals/retrieval-v3.json`，17 题）
+## 分模态指标（v4：整讲语料，53 题）
+
+| 模态 | 题数 | BM25 | 混合 | +精排 |
+|---|---|---|---|---|
+| pdf | 21 | 0.62 | 0.57 | **0.76** |
+| video | 27 | 0.56 | 0.74 | **0.89** |
+| text | 1 | 0.00 | 0.00 | 1.00 |
+| image | 1 | 不计分 | 不计分 | — |
+| 合计（可评分） | 49 | 0.57 | 0.65 | **0.84** |
+
+**PDF 上混合检索比 BM25 差**（0.62 → 0.57）是这套语料暴露的新问题：视频块一段 1000 字、
+讲稿又在复述讲义，双塔向量分不清"讲义页"和"讲者在念这页"，RRF 融合后正确页被挤下去；
+交叉编码器逐对读原文能修回来（0.76）。8 条残留漏检的逐条复核、以及为什么没有顺手
+放宽标注，写在[检索文档](retrieval.md#整讲语料17-题满分换来的是一组更难看的数字2026-11-23)。
+
+## v3 的 17 题（历史，2026-11-18）
 
 | 模态 | 题数 | BM25 Hit@5 | 混合 Hit@5 | MRR@5（混合） |
 |---|---|---|---|---|
@@ -129,18 +155,24 @@ BM25 全空，只有向量能救。** 这正是跨语言检索在视频上的复
 uv sync --extra embed
 export LA_EMBEDDING_CACHE_DIR=~/.cache/la-models
 
+uv run python scripts/check_annotation_targets.py --queries evals/retrieval-v4.json
 uv run python scripts/retrieval_report.py \
     --corpus data/evaluations/multimodal-v1/corpus/workspace.db \
-    --queries evals/retrieval-v3.json \
-    --json data/evaluations/multimodal-v1/retrieval-v3.json
+    --queries evals/retrieval-v4.json \
+    --json data/evaluations/multimodal-v1/report.json
 ```
 
-重建语料（只在需要重新生成无声视频时用）：
+重建整讲语料（可续跑，已入库的材料会跳过；ASR 约 6 分钟）：
+
+```bash
+uv run python scripts/build_lecture_corpus.py --force   # --force 才会清空重来
+uv run python scripts/prepare_multimodal_suite.py       # 能力用例的绑定与 suite
+```
+
+无声视频的生成方式（`cs336-prenorm-silent.mp4`，已入库，一般不用重跑）：
 
 ```bash
 ffmpeg -ss 20 -t 30 -i <原视频> -an -c:v libx264 -crf 24 <输出>.mp4
-uv run python scripts/prepare_multimodal_corpus.py
-uv run python scripts/prepare_multimodal_suite.py
 ```
 
 能力用例（`learning-core-v4.json`，28 cases / 56 turns）需要真实模型调用，

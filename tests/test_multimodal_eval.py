@@ -146,6 +146,32 @@ def test_retrieval_v3_targets_stay_inside_asset_time_ranges():
             )
 
 
+def test_retrieval_v4_targets_stay_inside_lecture_time_ranges():
+    """整讲语料没有切片偏移，时间轴就是原片时间轴。
+
+    两条不变量：区间必须在资产时长内（v2 的 859 秒那种永假锚点不能再出现），
+    且不能标 ``time_basis=original``——评测脚本里的资产表没有 ``source_start_seconds``，
+    标了 original 会走到"拿不到偏移就判不匹配"的分支，静默变成永远漏检。
+    """
+
+    suite = json.loads((ROOT / "evals" / "retrieval-v4.json").read_text(encoding="utf-8"))
+    durations = {"cs_video": 5223.0, "zh_video": 6120.0}
+    identifiers, video_targets = set(), 0
+    for query in suite["queries"]:
+        assert query["id"] not in identifiers, f"重复的题目 id：{query['id']}"
+        identifiers.add(query["id"])
+        assert query.get("targets_mode", "any") in {"any", "all"}
+        for target in query.get("expected", []):
+            seconds = target.get("seconds")
+            if not seconds:
+                continue
+            video_targets += 1
+            assert target.get("time_basis", "clip") == "clip", query["id"]
+            low, high = seconds
+            assert 0 <= low < high <= durations[target["asset"]], (query["id"], seconds)
+    assert video_targets >= 20, "视频目标太少，扩样本的意义就没了"
+
+
 def test_learning_core_v2_gives_multimodal_cases_real_targets():
     suite = json.loads((ROOT / "evals" / "learning-core-v4.json").read_text(encoding="utf-8"))
     cases = {case["id"]: case for case in suite["cases"]}

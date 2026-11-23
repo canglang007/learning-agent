@@ -1,6 +1,6 @@
 # 检索：从 BM25 到混合检索
 
-更新于：2026-11-18。这份文档记录检索方案的对照实验、错例和取舍理由，数字都可复现。
+更新于：2026-11-23。这份文档记录检索方案的对照实验、错例和取舍理由，数字都可复现。
 
 ## 一句话结论
 
@@ -11,6 +11,12 @@
 补齐视频与图像题之后（`evals/retrieval-v3.json`，17 题），这个提升幅度更大：
 **0.43 → 0.79**。其中纯视频 5 题从 0.40 到 1.00，是混合检索真正不可替代的地方；
 分模态拆解与两个被掩盖的标注缺陷见[多模态评测](multimodal-eval.md)。
+
+把两个两三分钟的切片换成两讲完整原片之后（`evals/retrieval-v4.json`，53 题、
+467 个分块），17 题上的满分不再成立，换成一组更难看但更可信的数字：
+**BM25 0.57 → 混合 0.65 → 加交叉编码器精排 0.84**（49 条可评分，
+`matrix_scan` 是纯图页不计分）。视频仍是差距最大的地方：0.56 → 0.74 → 0.89。
+
 
 ## 为什么 BM25 不够
 
@@ -36,8 +42,9 @@ BM25 命中：空                          ← 全空，向量是唯一出路
 语料 6 份材料、208 个 chunk（CS336 68 页 + optimization 119 页 + 两段视频 + 图片页 + 笔记）。
 
 下面这张表用的是 v2（12 题）。v3 加了 5 条纯视频题、修掉两个标注缺陷后扩到 17 题，
-总体变成 0.43 → 0.79；为避免两套数字混用，v3 的分模态结果只在
-[多模态评测](multimodal-eval.md)里报，本文其余部分保持 v2，作为选型阶段的记录。
+总体变成 0.43 → 0.79；v4 换成两讲整讲、扩到 53 题后是 0.57 → 0.65 → 0.84
+（见本文末"整讲语料"一节）。三套数字各对应一套语料，**不要跨套比较**；
+本节保留 v2 作为选型阶段的记录，因为"哪个向量模型"这个结论正是那 12 题定的。
 
 | 方案 | 参数量 | Hit@5 | MRR@5 | 常驻内存 | 结论 |
 |---|---|---|---|---|---|
@@ -141,7 +148,99 @@ CE 分差显著时 sigmoid 接近线性，融合跟随 CE——`pre_zh` 仍第 1
 单元测试 `test_fuse_ce_with_rrf_saturation_tiebreak_and_replace_mode`
 锁定饱和托底与 `1.0` 纯替换两种行为。
 
+## 整讲语料：17 题满分换来的是一组更难看的数字（2026-11-23）
+
+上一节的 `1.000` 有个绕不过去的追问：**就 17 题，而且视频只有 6 个分块**。
+两个视频资产是两三分钟的切片，切出来 3 块，所谓"视频检索"其实是在三选一。
+这种语料下 hit@5 全中说明不了多少东西。
+
+所以把语料换成整讲原片（`scripts/build_lecture_corpus.py`）：
+
+| 材料 | 来源 | 分块 | 备注 |
+|---|---|---|---|
+| cs336-architecture.pdf | 68 页讲义 | 69 | 不变 |
+| optimization.pdf | CS231n 第 3 讲 119 页 | 131 | 不变 |
+| study-notes.md | 手写笔记 | 2 | 不变 |
+| worksheet.pdf | 纯图页 | 0 | 文字层为空，只能看图 |
+| cs336-lecture.mp4 | 87 分钟整讲 | **121** | 无字幕，走本地 ASR |
+| ntu-lecture.mp4 | 102 分钟整讲 | **144** | 官方 zh-TW 字幕 |
+
+语料从 208 段增到 **467 段**，视频从 6 段增到 **265 段**（占 57%）。
+ASR 用产品自己的任务链：faster-whisper base、CPU int8、300 秒分片 + 5 秒重叠，
+87 分钟音频 **18 个分片 383 秒**转完（约 13.6× 实时），1876 条字幕段。
+索引 467 段嵌入 6.7 秒（Apple Silicon，MiniLM-L12 ONNX）。
+
+题目从 17 扩到 **53**：CS336 讲义 15、优化讲义 6、CS336 视频 10、NTU 视频 17、
+纯图页 1、笔记 1、负例 3。`scripts/check_annotation_targets.py` 逐条校验
+"视频目标区间必须被单个分块完整包含"——v3 的 `runtime` 就是栽在这上面。
+
+### 三档结果（49 条可评分）
+
+| 策略 | Hit@5 | MRR@5 |
+|---|---|---|
+| BM25 | 0.571 | 0.458 |
+| 混合 RRF（无重排） | 0.653 | 0.501 |
+| 纯 CE 替换（`rerank_ce_weight=1.0`） | 0.816 | **0.663** |
+| **分数融合（`rerank_ce_weight=0.9`，产品默认）** | **0.837** | 0.653 |
+
+分模态（`scripts/rerank_experiment.py`，产品 `search` 路径）：
+
+| 模态 | 题数 | BM25 | 混合 | +精排 |
+|---|---|---|---|---|
+| pdf | 21 | 0.62 | 0.57 | **0.76** |
+| video | 27 | 0.56 | 0.74 | **0.89** |
+| text | 1 | 0.00 | 0.00 | 1.00 |
+
+两个现象值得单独说：
+
+1. **PDF 上 RRF 反而比 BM25 差（0.62 → 0.57）。** 语料里 57% 是视频分块，而视频块
+   一段 1000 字、讲稿又在复述讲义内容，双塔向量分不清"这页讲义"和"讲者在念这页"，
+   两路融合后正确页被讲稿块挤下去。精排能修（0.76），因为逐对读原文才分得清
+   "幻灯片短句"和"口语复述"。这是 v3 那 17 题看不到的：切片太短，讲稿根本没覆盖讲义。
+2. **视频仍然是从 0.56 到 0.89 的最大跨度。** 中文问英文字幕（CS336 10 题）在
+   BM25 下几乎全空，混合与精排两级各修一部分。
+
+### 融合权重在大样本上复核
+
+v3 时权重 0.9 是在 14 条可评分用例上选的，当时就写明"样本小，更大查询集上需复核"。
+53 题上重扫（`scripts/rerank_alpha_sweep.py`）：
+
+| alpha | 0.75 | 0.80 | 0.85 | 0.90（默认） | 0.95 |
+|---|---|---|---|---|---|
+| Hit@5 | **0.857** | **0.857** | **0.857** | 0.837 | 0.816 |
+| MRR@5 | 0.661 | 0.661 | 0.657 | 0.653 | 0.661 |
+
+最优区间从 0.85–0.9 移到 0.75–0.85，但 0.9 只差 **1 条题**（41/49 vs 42/49）。
+**没有把默认值改成 0.8**：那等于用报分用的同一套 53 题去拟合参数，
+报出来的 0.857 立刻失去意义。这里如实记录敏感性，默认值留待独立验证集再定。
+
+### 8 条漏检逐条复核
+
+精排后仍有 8 条不中（`pre_zh`、`runtime`、`double_norm`、`gradient`、
+`pdf_head_ratio`、`video_arith_intensity`、`video_sliding_window`、
+`video_tool_example`）。逐条看前 5 名构成，四类原因：
+
+- **同一事实在讲稿里被复述，标注只认讲义页（4 条）**：`double_norm` 的第 1 名是
+  讲稿 570–614 秒 "putting layer norms in the residual stream is bad"，
+  正是讲义 p13 的内容；`gradient` 的前两名是讲稿 526–570 / 441–482 秒讲 loss spikes
+  与 warm-up，对应 p12/p19；`pdf_head_ratio` 第 2 名是 p42（同一小节的上一页）；
+  `video_tool_example` 第 1 名是紧邻的下一个分块，原话就是"Temperature 括号台北某段时间"。
+  这四条**检索没答错，是标注过窄**。
+- **术语撞车（1 条）**：`video_arith_intensity` 问"算术强度高指什么"，
+  第 1 名是讲 GQA 的"the arithmetic intensity is not so good"——同一个词，答的是另一件事。
+- **分块把句子切断（1 条）**：`video_sliding_window` 的定义句
+  "where at each layer, you only pay attention / to a small region…" 被切在
+  5120.2 秒的分块边界上，含定义后半句的那块开头是 "to a small region around…"，
+  语义残缺，检索不到。这是分块策略的真实缺陷。
+- **跨语言老问题（2 条）**：`pre_zh`、`runtime` 中文口语化提问对英文短句，
+  v3 时 `pre_zh` 也靠精排才救回来，语料变大后又被稀释。
+
+**没有按这四类去改标注。** 改标注规则要重看全部 53 条，只放宽失败的那 4 条就是
+选择性放宽，分数会虚高。多目标标注（"讲义页或讲稿对应片段任一中即算命中"）
+留给 v5，规则先定死再整体复核。
+
 ## 实现要点
+
 
 - **双通道 + RRF 融合**，不做加权。BM25 分数无上界、余弦相似度在 [-1,1]，
   量纲不同且没有可靠标定，加权等于拍脑袋；RRF 只用排名（`1/(60+rank)`），稳健。
@@ -169,7 +268,7 @@ CE 分差显著时 sigmoid 接近线性，融合跟随 CE——`pre_zh` 仍第 1
 | 指标 | 数值 |
 |---|---|
 | 模型加载（首次含下载） | 121 s |
-| 索引 208 个 chunk | 16.9 s |
+| 索引 208 个 chunk（v2 语料） | 16.9 s |
 | 单条查询编码 | 0.08 s |
 | 完整 search 调用 | 0.10 s |
 | 进程 RSS / 峰值 | 495 MB / 505 MB |
@@ -185,32 +284,42 @@ CE 分差显著时 sigmoid 接近线性，融合跟随 CE——`pre_zh` 仍第 1
 ## 复现方式
 
 ```bash
-uv sync --extra embed
+uv sync --extra embed --extra asr
 export LA_EMBEDDING_CACHE_DIR=~/.cache/la-models   # 可选，固定缓存避免重复下载
 
+# 1) 建整讲语料（约 8 分钟，绝大部分花在 ASR；可续跑，已入库的材料会跳过）
+uv run python scripts/build_lecture_corpus.py
+
+# 2) 先校验标注可达，再跑指标
+uv run python scripts/check_annotation_targets.py --queries evals/retrieval-v4.json
 uv run python scripts/retrieval_report.py \
-    --corpus <含 chunks 的 workspace.db> \
-    --queries evals/retrieval-v3.json \
-    --json /tmp/retrieval.json
+    --corpus data/evaluations/multimodal-v1/corpus/workspace.db \
+    --queries evals/retrieval-v4.json \
+    --json data/evaluations/multimodal-v1/report.json
 ```
 
 输出包含总体指标、分模态指标和逐题排名；`--model` 可换模型做同样的对照。
-若语料里缺某个标注资产，脚本会先警告"相关题目必然漏检"，
-避免把语料不匹配误读成模型不行。
+`--model-cache` 默认复用 `~/.cache/la-models`——不指定时 fastembed 会在语料目录下
+重下一份，实测会卡在下载上，看上去像在算其实在等网络。
 
 重排对照（走产品 `search` 路径，首次含模型下载约 1 GB）：
 
 ```bash
-uv run python scripts/rerank_experiment.py
+uv run python scripts/rerank_experiment.py        # RRF vs 精排，写 rerank-product-path.json
+uv run python scripts/rerank_fusion_experiment.py # RRF vs 纯替换 vs 分数融合
+uv run python scripts/rerank_alpha_sweep.py       # 融合权重扫描
 ```
 
-输出 baseline 与 rerank 两个配置的总体/分模态指标和逐题变化，
-原始数据留在 `data/evaluations/multimodal-v1/rerank-product-path.json`。
+v3 的语料与报告留在 `data/evaluations/multimodal-v1/corpus-clips-v3/` 与
+`report-v3.json`，旧数字仍可原样复现。
+
 ## 已知局限
 
-- 10 条有效样本量很小，0.60 与 0.70 的差距在统计上没有意义；结论只在"向量通道有用"
-  这个量级上成立。
-- `gradient` 的退步说明融合策略还有空间：当前 RRF 对两路一视同仁，
-  专业术语类查询其实更该信 BM25。
+- 49 条可评分，比 v3 的 14 条厚一倍多，但"0.84 与 0.86"这种差距仍没有统计意义；
+  能站住的结论是"向量通道有用、精排有用、视频上最有用"。
+- 同一事实在讲义与讲稿里重复出现，页级单一标注偏严（见上节 8 条复核）；
+  多目标标注未做。
+- 分块按固定字数与时间切，会把定义句切在边界上，含后半句的分块语义残缺。
 - 只覆盖中↔英与中↔中；未测日韩、公式主导的页面。
-- 视频按时间段召回，标注粒度到分钟级，比页级更粗。
+- 视频按时间段召回，标注粒度到秒级但分块仍是 40–45 秒，比页级更粗。
+

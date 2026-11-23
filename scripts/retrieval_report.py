@@ -23,8 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 DEFAULT_ASSETS = {
     "cs_pdf": "cs336-architecture.pdf",
-    "cs_video": "cs336-prenorm.mp4",
-    "zh_video": "ntu-tool-use.mp4",
+    "cs_video": "cs336-lecture.mp4",
+    "zh_video": "ntu-lecture.mp4",
     "optimization": "optimization.pdf",
     "worksheet": "worksheet.pdf",
     "notes": "study-notes.md",
@@ -111,9 +111,14 @@ def fmt(value, digits=2):
 def main():
     parser = argparse.ArgumentParser(description="检索对照报告")
     parser.add_argument("--corpus", type=Path, required=True)
-    parser.add_argument("--queries", type=Path, default=Path("evals/retrieval-v3.json"))
+    parser.add_argument("--queries", type=Path, default=Path("evals/retrieval-v4.json"))
     parser.add_argument("--assets", type=Path)
     parser.add_argument("--model", default=None, help="embedding 模型；缺省用配置默认值")
+    parser.add_argument(
+        "--model-cache",
+        default=str(Path.home() / ".cache" / "la-models"),
+        help="embedding 模型缓存目录；缺省复用共享缓存，避免每次评测重下一份",
+    )
     parser.add_argument("--json", type=Path, help="把完整结果另存为 JSON")
     args = parser.parse_args()
 
@@ -139,6 +144,7 @@ def main():
         data_root=work,
         retrieval_mode="hybrid",
         embedding_provider="local",
+        embedding_cache_dir=args.model_cache,
         **({"embedding_model": args.model} if args.model else {}),
     )
     if hybrid.embedding_model:
