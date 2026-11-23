@@ -352,7 +352,11 @@ def create_app(settings=None, provider=None):
             raise HTTPException(409, item["error"] or "媒体仍在准备，请稍后刷新")
         path = store.root / item["preview_path"]
         # 按实际文件给类型：直接可播时 preview_path 就是原文件，可能是 webm/mov。
-        return FileResponse(path, media_type=content_type(path))
+        kind = content_type(path)
+        if not item["has_video"]:
+            # 纯音频装进 mp4/webm 时，标成 audio/* 才是对的。
+            kind = {"video/mp4": "audio/mp4", "video/webm": "audio/webm"}.get(kind, kind)
+        return FileResponse(path, media_type=kind)
 
     @app.post("/api/spaces/{space_id}/materials/{material_id}/prepare", status_code=202)
     async def retry_media(space_id: str, material_id: str):

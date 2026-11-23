@@ -21,6 +21,18 @@
     uv sync --extra embed --extra asr
     python scripts/build_lecture_corpus.py --root data/evaluations/multimodal-v1/corpus
 
+原片下载（``data/acceptance/real-courses/`` 下，不入库、不随仓库分发）::
+
+    NODE=$(command -v node)
+    yt-dlp --js-runtimes "node:$NODE" \\
+      --write-subs --sub-langs "zh-TW" --convert-subs vtt \\
+      -o "data/acceptance/real-courses/<dir>/%(id)s.%(ext)s" "<url>"
+
+选流的原则是**处理成本最小**，不是"产品只吃什么"：默认 ``bv*[height<=720]+ba``，
+拿到 webm/opus 也照样入库（产品按容器+编码分级：能播就原样提供、只差壳就 remux）。
+``--js-runtimes`` 不是可选项：缺 JS 运行时拿不到正常签名的流，实测被限速到
+51 KB/s，指定 node 后 518 KB/s。
+
 脚本可续跑：按材料名跳过已入库的，加新材料不用重跑已有转写。目标目录非空且没加
 ``--force`` 时会续跑；``--force`` 只清掉 materials/ 与 workspace.db，原始视频仍在
 ``data/acceptance/real-courses/`` 下。
