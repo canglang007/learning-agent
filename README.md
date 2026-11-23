@@ -13,7 +13,7 @@ Learning Agent 面向在长课程、讲义和个人资料里自学的场景。�
 - **可选自动路由**：简单问题走直答或固定检索，涉及页面、图表、视频、反馈或选中位置时回到完整 Agent，保留同一套 Runtime 与记录。
 - **连续学习**：保存当前目标、卡点、讲解尝试和用户反馈；支持主题接续与可管理的跨会话记忆。
 - **可恢复执行**：问题提交后后台执行，网页显示真实进度；刷新、断线或进程重启后按检查点恢复，可取消，可查看草稿。
-- **本地检索**：中文二元词与英文词 BM25，叠加进程内多语言向量（无需外部服务），RRF 融合，交叉编码器精排（默认开启）；向量或精排不可用时明确退回上一级并说明原因。92 题标注集（7 讲整讲 8.8 小时 + 三份讲义，942 个分块、83 道可评分）上 Hit@5：BM25 0.40 → 混合 0.55 → **加精排 0.71**。精排不能替代向量召回——只给 BM25 候选加精排是 0.52。上一版 53 题（2 讲、467 块）为 0.57 → 0.65 → 加精排 0.84，两版不可比，见[检索对照](docs/retrieval.md)。
+- **本地检索**：中文二元词与英文词 BM25，叠加多语言向量（默认走本机 ollama 的 `bge-m3`，可切进程内 ONNX 或 OpenAI 兼容接口），RRF 融合，交叉编码器精排（默认开启）；向量或精排不可用时明确退回上一级并说明原因。92 题标注集（7 讲整讲 8.8 小时 + 三份讲义，942 个分块、83 道可评分）上 Hit@5：BM25 0.40 → 混合 **0.64** → **加精排 0.77**。换模型差别很大——同一套检索换成 384 维小模型只有 0.55 / 0.72，所以报数字必须带模型名。精排不能替代向量召回：只给 BM25 候选加精排是 0.52。上一版 53 题（2 讲、467 块）为 0.57 → 0.65 → 加精排 0.84，两版不可比，见[检索对照](docs/retrieval.md)。
 - **可评测**：固定 Dataset、逐尝试证据、规则/人工复核、baseline/candidate 对比、只读评测页，以及冻结基线与退化门禁。
 
 ## 界面
@@ -52,7 +52,7 @@ cp .env.example .env
 | --- | --- | --- |
 | `asr` | `uv sync --extra dev --extra asr` | 本地语音转写（默认 provider 为 `local`） |
 | `ocr` | `uv sync --extra dev --extra ocr` | 识别 PDF 扫描页的文字 |
-| `embed` | `uv sync --extra dev --extra embed` | 进程内多语言向量检索与交叉编码器精排（模型首次使用时下载） |
+| `embed` | `uv sync --extra dev --extra embed` | 交叉编码器精排；以及 `local` 向量来源（进程内 ONNX）。默认向量来源是 ollama，不依赖这一项 |
 
 缺少附加项时对应入口返回安装提示，不会让后台任务静默失败。
 
@@ -145,6 +145,21 @@ docker compose up --build
 ```
 
 打开 <http://127.0.0.1:8320>。API 与 worker 共享 `./data`，`Ctrl-C` 结束；不需要在本机安装 Python 或 ffmpeg。Docker daemon 未启动时继续使用 `./start.sh`。
+
+**容器里的向量来源要另外说清楚。** 默认是 `ollama` + `bge-m3`，而容器内的
+`localhost` 是容器自己，连不到宿主机的 ollama。两种做法任选：
+
+```bash
+# A. 用宿主机的 ollama（macOS / Windows 的 Docker Desktop 可直接用这个主机名）
+LA_EMBEDDING_BASE_URL=http://host.docker.internal:11434
+
+# B. 不装 ollama：改用镜像内的 ONNX 模型（已带 embed 扩展，指标低一档：混合 0.55 而非 0.64）
+LA_EMBEDDING_PROVIDER=local
+LA_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+```
+
+两者都不设时不会静默降级：检索状态里会写明 `dense_status=embedding_request_failed:*`，
+界面按关键词检索结果展示，精排仍然生效。
 
 ### 给别人试用
 
@@ -305,7 +320,7 @@ notes/              自用设计与复盘笔记（不提交）
 
 ## 当前状态
 
-- 工程回归：286 项通过、3 项按条件跳过；CI 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
+- 工程回归：299 项通过、1 项按条件跳过；CI 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
 - 本地 Docker build/run 与 Compose 配置已验证；GitHub Actions 绿色。
 - 已有自包含演示数据、自动路由、只读 MCP、基线结果表和 3–5 分钟演示脚本。
 - 小型实例实测：1 核 1 GiB 上三路并发提问全部完成，进程常驻约 210 MB；耗时受模型服务影响明显（27–77 秒）。
