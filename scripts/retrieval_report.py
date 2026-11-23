@@ -88,6 +88,11 @@ def run(store, settings, space, queries, assets, embedder=None):
         grouped.setdefault(row["modality"], []).append(row)
     return {
         "mode": settings.retrieval_mode,
+        # 每条结果自带"是哪套配置跑出来的"：模型换了以后，没有这几行就没法判断
+        # 两个 JSON 里的分数能不能相互比较（上一版就出过这种混淆）。
+        "provider": settings.embedding_provider,
+        "embedding_model": settings.embedding_model if settings.retrieval_mode != "bm25" else None,
+        "rerank_model": settings.rerank_model or None,
         "hit_at_5": metrics(scored)["hit_at_5"],
         "mrr_at_5": metrics(scored)["mrr_at_5"],
         "by_modality": {name: metrics(items) for name, items in sorted(grouped.items())},
@@ -105,6 +110,18 @@ def main():
     parser.add_argument("--queries", type=Path, default=Path("evals/retrieval-v5.json"))
     parser.add_argument("--assets", type=Path)
     parser.add_argument("--model", default=None, help="embedding 模型；缺省用配置默认值")
+    parser.add_argument(
+        "--provider",
+        default="local",
+        choices=["local", "ollama", "compatible"],
+        help="向量来源：local=进程内 fastembed，ollama=本机 ollama，compatible=OpenAI 兼容接口",
+    )
+    parser.add_argument(
+        "--base-url",
+        default="http://127.0.0.1:11434",
+        help="ollama/compatible 的地址；只有这两个 provider 用到",
+    )
+    parser.add_argument("--rerank-model", default="", help="交叉编码器模型；留空只报召回")
     parser.add_argument(
         "--model-cache",
         default=str(Path.home() / ".cache" / "la-models"),
@@ -140,11 +157,12 @@ def main():
         _env_file=None,
         data_root=work,
         retrieval_mode="hybrid",
-        embedding_provider="local",
+        embedding_provider=args.provider,
+        embedding_base_url=args.base_url,
         embedding_cache_dir=args.model_cache,
         # 这一档报的是"混合检索"，产品默认还会再走一遍精排；
         # 精排的效果单独由 rerank_experiment.py 报，两档不能混在一起。
-        rerank_model="",
+        rerank_model=args.rerank_model,
         **({"embedding_model": args.model} if args.model else {}),
     )
     if hybrid.embedding_model:

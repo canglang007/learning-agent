@@ -30,12 +30,11 @@ assets = load_assets(None, store, space)
 
 
 def make_settings(rerank_model, ce_weight=0.9):
+    # 向量走 config.py 默认（ollama + bge-m3）：脚本里写死模型，测的就不是产品了。
     return Settings(
         _env_file=None,
         data_root=work,
         retrieval_mode="hybrid",
-        embedding_provider="local",
-        embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         embedding_cache_dir=str(Path.home() / ".cache" / "la-models"),
         rerank_model=rerank_model,
         rerank_ce_weight=ce_weight,

@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--queries", type=Path, default=Path("evals/retrieval-v5.json"))
     parser.add_argument("--mode", choices=("bm25", "hybrid"), default="hybrid")
     parser.add_argument("--rerank-model", default="")
+    parser.add_argument("--base-url", default="http://127.0.0.1:11434")
     parser.add_argument(
         "--model-cache", default=str(Path.home() / ".cache" / "la-models")
     )
@@ -62,8 +63,9 @@ def main():
         _env_file=None,
         data_root=work,
         retrieval_mode=args.mode,
-        embedding_provider="local" if args.mode == "hybrid" else "disabled",
-        embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        # hybrid 走 config.py 默认的 ollama + bge-m3；bm25 档干脆不开向量。
+        embedding_provider="ollama" if args.mode == "hybrid" else "disabled",
+        embedding_base_url=args.base_url,
         embedding_cache_dir=args.model_cache,
         rerank_model=args.rerank_model,
     )

@@ -39,8 +39,7 @@ settings = Settings(
     _env_file=None,
     data_root=work,
     retrieval_mode="hybrid",
-    embedding_provider="local",
-    embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    # 向量走 config.py 默认（ollama + bge-m3），不在这里写死模型名。
     embedding_cache_dir=str(Path.home() / ".cache" / "la-models"),
     rerank_model="BAAI/bge-reranker-base",
 )

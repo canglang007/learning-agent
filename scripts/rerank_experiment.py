@@ -26,12 +26,16 @@ assets = load_assets(None, store, space)
 
 
 def make_settings(rerank_model):
+    """不覆盖向量配置，走 config.py 的默认（ollama + bge-m3）。
+
+    这几个实验脚本原来各自把向量写死成进程内的 MiniLM——那是"当时本机没有
+    ollama 服务"的产物，不是项目的配置。写死的后果是脚本测出来的数字与产品
+    实际用的向量模型不是同一套，两边的分数不能放在一张表里。
+    """
     return Settings(
         _env_file=None,
         data_root=work,
         retrieval_mode="hybrid",
-        embedding_provider="local",
-        embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         embedding_cache_dir=str(Path.home() / ".cache" / "la-models"),
         rerank_model=rerank_model,
     )
@@ -64,6 +68,10 @@ def run(settings):
         grouped.setdefault(r["modality"], []).append(r)
     return {
         "mode": settings.rerank_model or "hybrid_rrf",
+        # 落盘的 JSON 必须自证配置：只存分数的话，换了模型之后没人分得清
+        # 两份文件能不能互相比。
+        "provider": settings.embedding_provider,
+        "embedding_model": settings.embedding_model,
         "overall": metrics(scored),
         "by_modality": {name: metrics(items) for name, items in sorted(grouped.items())},
         "rows": rows,

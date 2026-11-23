@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from eval_assets import DEFAULT_ASSETS
+from eval_assets import DEFAULT_ASSETS, settings_for
 
 
 def main():
@@ -31,10 +31,12 @@ def main():
     parser.add_argument("--depth", type=int, default=120)
     parser.add_argument("--rerank-candidates", type=int, default=100)
     parser.add_argument("--rerank-model", default="BAAI/bge-reranker-base")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--provider", default="local", choices=["local", "ollama", "compatible"])
+    parser.add_argument("--base-url", default="http://127.0.0.1:11434")
     parser.add_argument("--model-cache", default=str(Path.home() / ".cache" / "la-models"))
     args = parser.parse_args()
 
-    from learning_agent.config import Settings
     from learning_agent.evaluation.graders import matches
     from learning_agent.retrieval import Embedder, Retriever
     from learning_agent.store import Store
@@ -55,16 +57,7 @@ def main():
     }
     queries = {q["id"]: q for q in json.loads(args.queries.read_text(encoding="utf-8"))["queries"]}
 
-    settings = Settings(
-        _env_file=None,
-        data_root=work,
-        retrieval_mode="hybrid",
-        embedding_provider="local",
-        embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        embedding_cache_dir=args.model_cache,
-        rerank_model=args.rerank_model,
-        rerank_candidates=args.rerank_candidates,
-    )
+    settings = settings_for(work, args, rerank_candidates=args.rerank_candidates)
     retriever = Retriever(store, settings, Embedder(settings))
     retriever.prepare(space)
 

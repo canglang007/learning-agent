@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from eval_assets import DEFAULT_ASSETS
+from eval_assets import DEFAULT_ASSETS, settings_for
 
 # 复合查询的切分点：问句结尾、分句标点、并列与对照连词。
 # 「和 / 与 / 各自」这类连词在单主题问句里也会出现，所以切出来的子查询是
@@ -125,10 +125,12 @@ def main():
     parser.add_argument("--rerank-candidates", type=int, default=20)
     parser.add_argument("--quota", type=int, default=0, help="每材料准入上限；0 关闭（实测降低指标）")
     parser.add_argument("--model-cache", default=str(Path.home() / ".cache" / "la-models"))
+    parser.add_argument("--model", default=None, help="向量模型；缺省用配置默认（ollama bge-m3）")
+    parser.add_argument("--provider", default="ollama", choices=["local", "ollama", "compatible"])
+    parser.add_argument("--base-url", default="http://127.0.0.1:11434")
     parser.add_argument("--json", type=Path)
     args = parser.parse_args()
 
-    from learning_agent.config import Settings
     from learning_agent.retrieval import Embedder, Retriever
     from learning_agent.store import Store
 
@@ -149,20 +151,16 @@ def main():
     queries = json.loads(args.queries.read_text(encoding="utf-8"))["queries"]
 
     def make(model):
-        return Settings(
-            _env_file=None,
-            data_root=work,
-            retrieval_mode="hybrid",
-            embedding_provider="local",
-            embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-            embedding_cache_dir=args.model_cache,
-            rerank_model=model,
-            rerank_candidates=args.rerank_candidates,
-        )
+        return settings_for(work, args, rerank_model=model, rerank_candidates=args.rerank_candidates)
 
     plain = Retriever(store, make(""), Embedder(make("")))
     plain.prepare(space)
-    print(f"语料 {args.corpus}  题目 {args.queries}  候选深度 {args.depth}", flush=True)
+    print(
+        f"语料 {args.corpus}  题目 {args.queries}  候选深度 {args.depth}\n"
+        f"向量 {plain.settings.embedding_provider} / {plain.settings.embedding_model}"
+        f"  精排 {plain.settings.rerank_model or '关'}",
+        flush=True,
+    )
 
     def candidates(query):
         return plain.search(space, query["question"], depth=args.depth)["hits"]
@@ -173,11 +171,29 @@ def main():
     configs = {}
 
     def dump():
-        """每算完一组就落盘：中途中断也不至于把前面的对照全丢掉。"""
+        """每算完一组就落盘：中途中断也不至于把前面的对照全丢掉。
+
+        ``meta`` 记死"这组数字是哪个向量模型、哪个精排模型跑出来的"。上一版
+        文件里只有分数，模型换了之后没人分得清同一份 JSON 属于哪次实验——
+        这也是"用自己换的模型测出来、却当成产品数字"能悄悄发生的原因。
+        """
         if args.json:
             args.json.write_text(
                 json.dumps(
-                    {name: {k: v for k, v in r.items() if k != "rows"} for name, r in configs.items()},
+                    {
+                        "meta": {
+                            "corpus": str(args.corpus),
+                            "queries": str(args.queries),
+                            "provider": plain.settings.embedding_provider,
+                            "embedding_model": plain.settings.embedding_model,
+                            "rerank_candidates": args.rerank_candidates,
+                            "depth": args.depth,
+                        },
+                        "configs": {
+                            name: {k: v for k, v in r.items() if k != "rows"}
+                            for name, r in configs.items()
+                        },
+                    },
                     ensure_ascii=False,
                     indent=1,
                 )
@@ -248,14 +264,11 @@ def main():
 
     bm25 = Retriever(
         store,
-        Settings(
-            _env_file=None,
-            data_root=work,
+        settings_for(
+            work,
+            args,
             retrieval_mode="bm25",
             embedding_provider="disabled",
-            # 漏了这一行，Reranker 会把模型下到 data_root/models（临时目录），
-            # 一次 1 GB 以上，跑完还被 rmtree 删掉——两组都卡在这里。
-            embedding_cache_dir=args.model_cache,
             rerank_model="BAAI/bge-reranker-base",
             rerank_candidates=args.rerank_candidates,
         ),
