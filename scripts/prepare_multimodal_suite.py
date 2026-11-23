@@ -1,4 +1,4 @@
-"""生成 learning-core-v2 用例，并为多模态语料写入 corpus 资产映射（准备脚本）。"""
+"""生成 learning-core-v4 用例，并为多模态语料写入 corpus 资产映射（准备脚本）。"""
 
 import json
 import sys
@@ -138,7 +138,7 @@ cases["summary_recall"]["settings"].update(
     }
 )
 
-suite["id"] = "learning-core-v2"
+suite["id"] = "learning-core-v4"
 suite["version"] = "4"
 suite["supersedes"] = "3"
 suite["change_note"] = (
@@ -155,10 +155,10 @@ suite["change_note"] = (
     "schema 固定开销约 14.2k 单元，12k 预算下多步回合在摘要触发后仍必然失败；"
     "16k（输入预算 12928）下 8 条注入历史 15.4k 仍超预算，摘要依然是必要条件。"
 )
-Path("evals/learning-core-v2.json").write_text(
+Path("evals/learning-core-v4.json").write_text(
     json.dumps(suite, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
 )
-print("写入 evals/learning-core-v2.json，cases:", len(suite["cases"]))
+print("写入 evals/learning-core-v4.json，cases:", len(suite["cases"]))
 
 root = Path("data/evaluations/multimodal-v1")
 store = Store(root / "corpus")

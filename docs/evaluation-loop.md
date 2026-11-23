@@ -80,17 +80,17 @@ uv run python -m learning_agent.evaluation review-candidate \
   --queue data/feedback/queue.json --case-id fb-5fd276b7f5 \
   --accept --concept "相对误差分母取真值" --note "确认是真实卡点"
 
-# 把接受的并进新版本
+# 把接受的并进新版本（示例：从 v1 升到 v4）
 uv run python -m learning_agent.evaluation promote-cases \
   --queue data/feedback/queue.json --suite evals/learning-core-v1.json \
-  --output evals/learning-core-v2.json --version 2
+  --output evals/learning-core-v4.json --version 4
 ```
 
 三条规则是硬的：
 
 - **重跑挖掘不覆盖人工结论**。同一条候选再挖一次，只更新分数和信号；已经是 accepted 或 rejected 的，状态和补过的 gold 都不动。不然挖掘脚本会把审核结果冲掉。
 - **gold 空的不让进**。promote 会把 `required_concepts`、`evidence_targets`、`forbidden_claims` 全空的候选挡下来，列在 `blocked_empty_gold` 里。空 gold 的 case 跑起来只有复核项，进了集也只是增加噪音。
-- **写新文件，不原地改**。改 `learning-core-v1.json` 会让已经冻好的基线失去可比性，所以 promote 输出到 v2，suite version 跟着升。同一个 case id 重复 promote 是幂等的，不会加两遍。
+- **写新文件，不原地改**。改 `learning-core-v1.json` 会让已经冻好的基线失去可比性，所以 promote 输出到新版本文件（当前 `learning-core-v4.json`，suite version 同步为 4），suite version 跟着升。同一个 case id 重复 promote 是幂等的，不会加两遍。
 
 补的 gold 只写进最后一轮，也就是真正要验的那个卡点。前一轮是被反馈的回答，本身就没讲清，把它当判定对象等于奖励错误答案。
 

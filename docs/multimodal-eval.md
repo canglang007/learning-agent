@@ -142,8 +142,12 @@ uv run python scripts/prepare_multimodal_corpus.py
 uv run python scripts/prepare_multimodal_suite.py
 ```
 
-能力用例（`learning-core-v2.json`，28 cases / 56 turns）需要真实模型调用，
+能力用例（`learning-core-v4.json`，28 cases / 56 turns）需要真实模型调用，
 用 `python -m learning_agent.evaluation` 跑，会产生 LLM 费用，与检索评测分开执行。
+
+> 文件名口径（2026-11-23 统一）：该文件历史上叫 `learning-core-v2.json`，但内部
+> `version` 字段早已升到 4，两个编号空间容易混。现在文件名、`id`、`version` 统一为
+> v4；历史评测产物里的 `suite_id: learning-core-v2` 是当时记录，保留未改。
 
 ## 能力评测真跑结果（2026-11-18，gpt-6-sol，56 turns 全量 + 全量复核）
 

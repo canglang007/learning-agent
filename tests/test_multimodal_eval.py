@@ -147,7 +147,7 @@ def test_retrieval_v3_targets_stay_inside_asset_time_ranges():
 
 
 def test_learning_core_v2_gives_multimodal_cases_real_targets():
-    suite = json.loads((ROOT / "evals" / "learning-core-v2.json").read_text(encoding="utf-8"))
+    suite = json.loads((ROOT / "evals" / "learning-core-v4.json").read_text(encoding="utf-8"))
     cases = {case["id"]: case for case in suite["cases"]}
     for name in ("silent_video", "zh_chart"):
         gold = cases[name]["turns"][0]["gold"]
@@ -170,8 +170,8 @@ def test_learning_core_v2_suite_loads_through_schema():
     from learning_agent.evaluation.schemas import Suite
 
     suite = Suite.model_validate_json(
-        (ROOT / "evals" / "learning-core-v2.json").read_text(encoding="utf-8")
+        (ROOT / "evals" / "learning-core-v4.json").read_text(encoding="utf-8")
     )
-    assert suite.id == "learning-core-v2"
+    assert suite.id == "learning-core-v4"
     assert suite.supersedes == "3"
     assert len(suite.cases) == 28
