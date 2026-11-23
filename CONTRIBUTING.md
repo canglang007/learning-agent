@@ -22,6 +22,8 @@ uv run python scripts/check_evaluation.py
 
 没有模型 key 时测试也能跑：测试用脚本化的假 provider，不发真实请求。
 
+> **用 Google Drive 等云盘同步本目录的注意**：`uv` 创建的 `.venv` 默认在 `.venv/bin/` 放指向本机 Python 的符号链接（symlink），云盘会把它们当"替身"报错或跳过。本机副本已把 `bin/python`、`bin/python3`、`bin/python3.13` 换为实体文件（硬链接），并在 `.venv/lib/` 硬链接了 `libpython3.13.dylib`，可正常同步。若在新机器上重新 `uv venv` 或删除重建 `.venv`，symlink 会回来；同步目录下不要重建环境，或重建后按同样方式把这三个入口替换为实体文件。`uv sync`（不删环境）不会重建这些入口。
+
 ## 改代码前值得知道的约定
 
 - **不猜模型能力**。协议、视觉、流式、上下文窗口都按服务商实际验证的结果写，不根据模型名推断；不确定就留成显式配置项或明确报错。
