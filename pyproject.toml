@@ -23,6 +23,9 @@ learning-agent-mcp = "learning_agent.mcp_server:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# 测试临时目录与缓存统一放到 /tmp，不污染项目根目录
+addopts = "--basetemp=/tmp/learning-agent-pytest-tmp"
+cache_dir = "/tmp/learning-agent-pytest-cache"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/learning_agent"]
