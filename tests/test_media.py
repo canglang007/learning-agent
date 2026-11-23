@@ -490,3 +490,49 @@ def test_ass_and_utf16_subtitles_are_converted(tmp_path):
     utf16 = ("1\n00:00:02,000 --> 00:00:03,000\n中文十六位\n").encode("utf-16")
     converted = parse_captions(utf16, 30, ".srt")
     assert [s["text"] for s in converted] == ["中文十六位"]
+
+
+def test_browser_cannot_decode_and_asks_for_transcode(tmp_path):
+    """客户端解不了这份编码时（例如 Safari 上的 AV1），要能要一份 h264 预览。
+
+    服务端按容器+编码判"能播"只是理论值；真解不了的是用户手上的浏览器。
+    这条路径保证：客户端说不行 → 媒体打回待转码 → 产出可播的 mp4。
+    """
+    webm = tmp_path / "colors.webm"
+    command(
+        [
+            "ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi",
+            "-i", "color=c=teal:s=160x120:r=10:d=2", "-f", "lavfi",
+            "-i", "sine=frequency=440:duration=2", "-c:v", "libvpx-vp9",
+            "-b:v", "200k", "-c:a", "libopus", "-f", "webm", str(webm),
+        ]
+    )
+    config = Settings(_env_file=None, data_root=tmp_path / "db", asr_provider="disabled")
+    close_for(tmp_path)
+    client = TestClient(create_app(config, Scripted([])))
+    space = client.post("/api/spaces", json={"content": "codec"}).json()["id"]
+    upload = client.post(
+        f"/api/spaces/{space}/materials", files={"file": ("colors.webm", webm.read_bytes())}
+    )
+    assert upload.status_code == 202
+    material = upload.json()["id"]
+    base = f"/api/spaces/{space}/materials/{material}"
+    with Worker(config) as worker:
+        worker.drain()
+
+    store = Store(config.data_root)
+    assert store.media(space, material)["playback"] == "direct"
+
+    assert client.post(base + "/prepare?force=1").status_code == 202
+    assert client.get(base + "/media").json()["state"] == "processing"
+    with Worker(config) as worker:
+        worker.drain()
+
+    info = store.media(space, material)
+    assert info["state"] == "ready"
+    assert info["playback"] == "transcode"
+    assert info["preview_path"].endswith("preview.mp4")
+    assert probe(config.data_root / info["preview_path"])["browser_playable"] is True
+    response = client.get(base + "/playback", headers={"Range": "bytes=0-99"})
+    assert response.status_code == 206
+    assert response.headers["content-type"] == "video/mp4"

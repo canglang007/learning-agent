@@ -421,6 +421,31 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
             "playback_url": f"/api/spaces/{space_id}/materials/{material_id}/playback",
         }
 
+    def request_transcode(self, space_id, material_id):
+        """客户端说它解不了这份编码时，把媒体打回"待转码"。
+
+        服务端只能按容器 + 编码判断"理论上能播"，但 AV1 这类编码在缺少硬件解码的
+        浏览器（Safari + M1/M2）里确实放不出来。与其让用户对着黑屏猜，不如由客户端
+        显式要一份 h264 预览。
+        """
+        self.media(space_id, material_id)
+        preview = str((self.root / "materials" / material_id / "preview.mp4").relative_to(self.root))
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT metadata FROM media WHERE material_id=?", (material_id,)
+            ).fetchone()
+            metadata = json.loads(row[0])
+            metadata["force_transcode"] = True
+            metadata["playback"] = "transcode"
+            metadata["browser_playable"] = False
+            metadata["preview_path"] = preview
+            db.execute(
+                "UPDATE media SET metadata=?,state='processing',error=NULL WHERE material_id=?",
+                (json.dumps(metadata), material_id),
+            )
+        return self.media(space_id, material_id)
+
     def segments(self, space_id, material_id):
         self.media(space_id, material_id)
         with self.connect() as db:

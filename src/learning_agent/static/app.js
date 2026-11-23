@@ -41,6 +41,19 @@ function markdown(node,text) {
   renderMathInElement(node,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false},{left:'$',right:'$',display:false}],throwOnError:false,trust:false,strict:'warn'});
 }
 function player() {return media?.has_video?$('video-player'):$('audio-player');}
+const CODEC_PROBES={av1:'video/mp4; codecs="av01.0.05M.08"',h264:'video/mp4; codecs="avc1.42E01E"',vp9:'video/webm; codecs="vp9"',vp8:'video/webm; codecs="vp8"'};
+function browserCanPlay(codec) {
+  // 服务端只能按容器+编码判断"理论上能播"；真的解不解得了要问浏览器自己。
+  if(!codec||!CODEC_PROBES[codec]) return true;
+  return document.createElement('video').canPlayType(CODEC_PROBES[codec])!=='';
+}
+async function ensureBrowserPlayable(info) {
+  if(info.playback!=='direct'||!info.has_video||browserCanPlay(info.video_codec)||info.transcodeRequested) return;
+  info.transcodeRequested=true;
+  notice(`当前浏览器解不了 ${String(info.video_codec).toUpperCase()}，正在转成 H.264……`);
+  await api(`/spaces/${space}/materials/${info.material_id}/prepare?force=1`,{method:'POST'});
+  poll=setTimeout(()=>refreshMedia().catch(e=>notice(e.message,true)),2000);
+}
 function linkReferences(body,references) {
   const verified=references.filter(r=>r.position_verified);
   const walker=document.createTreeWalker(body,NodeFilter.SHOW_TEXT), texts=[];
@@ -149,6 +162,7 @@ async function showMedia(id,start=0,end=null) {
   if(info.state==='ready') {
     const p=player();p.hidden=false;p.src=info.playback_url;p.onloadedmetadata=()=>{p.currentTime=start;};
     (info.has_video?$('audio-player'):$('video-player')).hidden=true;
+    await ensureBrowserPlayable(info).catch(e=>notice(e.message,true));
   }else{$('video-player').hidden=true;$('audio-player').hidden=true;}
   selectClip();await refreshMedia();$('media-reader').scrollIntoView({behavior:'smooth',block:'start'});
 }
@@ -169,7 +183,7 @@ async function refreshMedia() {
   if(media?.material_id!==id)return;
   $('segments').replaceChildren();
   for(const s of segments){const b=document.createElement('button');b.textContent=`${clock(s.start)}–${clock(s.end)} ${s.text}`;b.onclick=guarded(()=>{ $('clip-start').value=s.start;$('clip-end').value=Math.min(s.end,s.start+120);selectClip();seek(); });$('segments').append(b);}
-  if(!wasReady&&info.state==='ready'){const p=player();p.hidden=false;p.src=info.playback_url;}
+  if(!wasReady&&info.state==='ready'){const p=player();p.hidden=false;p.src=info.playback_url;await ensureBrowserPlayable(info).catch(e=>notice(e.message,true));}
   if(wasTranscribing&&info.transcript_state!=='running')await refreshIndex();
   if(info.state==='processing'||info.transcript_state==='running')poll=setTimeout(()=>refreshMedia().catch(e=>notice(e.message,true)),2000);
 }

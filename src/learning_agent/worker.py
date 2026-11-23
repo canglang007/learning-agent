@@ -131,7 +131,9 @@ class Worker:
 
         info = self.store.media(job["space_id"], job["material_id"])
         self.jobs.checkpoint(job, "preview")
-        if info.get("browser_playable"):
+        # force_transcode 来自客户端：服务端判定"能播"只说明容器+编码在理论上受支持，
+        # 用户手上的浏览器未必解得了 AV1，这时必须给一份 h264 预览。
+        if info.get("browser_playable") and not info.get("force_transcode"):
             with self.store.connect() as db:
                 db.execute("BEGIN IMMEDIATE")
                 self.jobs.check(job, db)

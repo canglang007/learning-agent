@@ -359,7 +359,11 @@ def create_app(settings=None, provider=None):
         return FileResponse(path, media_type=kind)
 
     @app.post("/api/spaces/{space_id}/materials/{material_id}/prepare", status_code=202)
-    async def retry_media(space_id: str, material_id: str):
+    async def retry_media(space_id: str, material_id: str, force: bool = False):
+        # force=1：客户端自己的浏览器解不了这份编码（例如 Safari 上的 AV1），
+        # 要求服务端出一份 h264 预览，而不是坚持"理论上能播"。
+        if force:
+            store.request_transcode(space_id, material_id)
         return jobs.enqueue("preview", space_id, settings, material_id)
 
     @app.post("/api/spaces/{space_id}/materials/{material_id}/captions")
