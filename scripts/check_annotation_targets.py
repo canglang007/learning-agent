@@ -11,7 +11,7 @@ v3 就吃过一次亏：``runtime`` 标注了一个在任何时间基准下都�
 所以把校验写成脚本，改标注后跑一次。
 
 用法：
-    python scripts/check_annotation_targets.py --queries evals/retrieval-v4.json
+    python scripts/check_annotation_targets.py --queries evals/retrieval-v5.json
 """
 
 import argparse
@@ -44,7 +44,7 @@ def load(corpus):
 
 def main():
     parser = argparse.ArgumentParser(description="校验标注目标可达性")
-    parser.add_argument("--queries", default="evals/retrieval-v4.json")
+    parser.add_argument("--queries", default="evals/retrieval-v5.json")
     parser.add_argument("--corpus", default="data/evaluations/multimodal-v1/corpus")
     args = parser.parse_args()
 

@@ -82,9 +82,7 @@ def run(store, settings, space, queries, assets, embedder=None):
                 "dense": result["dense_status"],
             }
         )
-    scored = [
-        row for row in rows if row["annotated"] and not row.get("unretrievable")
-    ]
+    scored = [row for row in rows if row["annotated"] and not row.get("unretrievable")]
     grouped = {}
     for row in scored:
         grouped.setdefault(row["modality"], []).append(row)
@@ -104,7 +102,7 @@ def fmt(value, digits=2):
 def main():
     parser = argparse.ArgumentParser(description="检索对照报告")
     parser.add_argument("--corpus", type=Path, required=True)
-    parser.add_argument("--queries", type=Path, default=Path("evals/retrieval-v4.json"))
+    parser.add_argument("--queries", type=Path, default=Path("evals/retrieval-v5.json"))
     parser.add_argument("--assets", type=Path)
     parser.add_argument("--model", default=None, help="embedding 模型；缺省用配置默认值")
     parser.add_argument(
@@ -147,7 +145,7 @@ def main():
         print("未指定 embedding 模型，跳过混合检索", file=sys.stderr)
     shutil.rmtree(work, ignore_errors=True)
 
-    print(f"\n语料：{args.corpus}  题目：{args.queries}  " f"模型：{hybrid.embedding_model or '-'}")
+    print(f"\n语料：{args.corpus}  题目：{args.queries}  模型：{hybrid.embedding_model or '-'}")
     print("\n| 模式 | Hit@5 | MRR@5 |\n|---|---|---|")
     for result in results:
         print(f"| {result['mode']} | {fmt(result['hit_at_5'])} | {fmt(result['mrr_at_5'], 3)} |")
@@ -177,7 +175,8 @@ def main():
             f"{results[0]['rows'][i]['id']}: {results[0]['rows'][i]['first_relevant_rank'] or '—'}→"
             f"{results[1]['rows'][i]['first_relevant_rank'] or '—'}"
             for i in range(len(results[0]["rows"]))
-            if results[0]["rows"][i]["first_relevant_rank"] != results[1]["rows"][i]["first_relevant_rank"]
+            if results[0]["rows"][i]["first_relevant_rank"]
+            != results[1]["rows"][i]["first_relevant_rank"]
         ]
         print("\n排名变化：" + ("，".join(improved) if improved else "无"))
 

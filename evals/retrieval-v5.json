@@ -1,0 +1,1346 @@
+{
+  "id": "retrieval-component-v5",
+  "version": 5,
+  "supersedes": 4,
+  "change_note": "相对 v4 的语料再扩容与题目补齐。语料从 467 块增至 942 块、6 份增至 11 份材料：新增 CS336 2026 第四讲（attention alternatives，86 分钟，本地 ASR）、第九讲（scaling laws，78 分钟，本地 ASR）、第十讲（inference，86 分钟，本地 ASR）、李宏毅 Flash Attention（50 分钟，官方 zh-TW 字幕）与 KV Cache（39 分钟，同）。v4 的 53 题一字未改，逐题结果仍在，但由于候选池翻倍，v4 报出的 Hit@5 0.630 与 v5 总分不可比，不能并排引用。(1) 新 5 讲各出 6 题，共 30 题，覆盖 v4 里完全缺席的四类内容：线性注意力的 RNN 形式与门控、Chinchilla 与 Kaplan 的分歧及后续查证、推理阶段的 TTFT/批大小/投机解码/量化、Flash Attention 的分块与数值修正、KV cache 的显存估算与复用折扣。(2) 新增 4 道跨讲对照题，targets_mode=all，要求两讲证据同时进前 5——这类题单讲语料根本出不了。(3) 负例从 3 道增至 8 道，新增 5 道是领域内但语料确实没覆盖的问题（PagedAttention、QLoRA/NF4、选择性扫描的 CUDA 实现、RWKV、top-p 采样），比原来的座位号类负例更难，用来观察检索器会不会硬凑一个相关段落。",
+  "queries": [
+    {
+      "id": "pre_zh",
+      "modality": "pdf",
+      "question": "CS336归一化放在子层之前，为何不影响残差直通？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            10,
+            11,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pre_en",
+      "modality": "pdf",
+      "question": "pre-norm main residual signal path LayerNorm",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            10,
+            11,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rms_definition",
+      "modality": "pdf",
+      "question": "RMSNorm分母里的范数与均方根定义",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            14
+          ]
+        }
+      ]
+    },
+    {
+      "id": "runtime",
+      "modality": "pdf",
+      "question": "为什么归一化浮点运算量少但耗时多？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            16
+          ]
+        }
+      ],
+      "annotation_evidence": "v3 移除了原 cs_video anchors=[859] 标注：cs336-prenorm.mp4 只覆盖原始视频 353-551 秒（source_start_seconds=353、时长 198 秒），859 无论按 clip 还是 original 基准都不可达；且该片讲 pre/post-norm，未涉及 FLOPs 与运行时间。原标注是永假条件，被 any() 断言语义掩盖。"
+    },
+    {
+      "id": "runtime_en",
+      "modality": "pdf",
+      "question": "FLOPs are not runtime memory movement",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            16
+          ]
+        }
+      ],
+      "annotation_evidence": "同 runtime：视频侧标注不可达且内容不符，已移除。"
+    },
+    {
+      "id": "double_norm",
+      "modality": "pdf",
+      "question": "残差分支前后都放LayerNorm但不在主干上",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            13
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gradient",
+      "modality": "pdf",
+      "question": "pre norm gradient stability larger learning rate",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            12,
+            19
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pdf_drop_bias",
+      "modality": "pdf",
+      "question": "现代 transformer 的线性层普遍去掉 bias 项，讲义给的两个理由是什么？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            18
+          ]
+        }
+      ],
+      "annotation_evidence": "p18：”Most modern transformers don't have bias terms… Reasons: memory (similar to RMSnorm) and optimization stability”"
+    },
+    {
+      "id": "pdf_swiglu_dim",
+      "modality": "pdf",
+      "question": "GLU 变体的 FFN 维度为什么按 8/3 倍缩放，而不是常规的 4 倍？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            37,
+            38
+          ]
+        }
+      ],
+      "annotation_evidence": "p37 给 4 倍常规；p38：”GLU variants scale down by 2/3rd. This means most GLU variants have d_ff = 8/3 d_model”"
+    },
+    {
+      "id": "pdf_parallel_layers",
+      "modality": "pdf",
+      "question": "把注意力和 MLP 放在同一层并行计算的模型有哪些，这种做法最早出现在哪个模型？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            27,
+            28
+          ]
+        }
+      ],
+      "annotation_evidence": "p28：”A few models (GPTJ, PaLM, GPT-NeoX) do parallel layers. Originally in GPT-J”，并列出 Cohere Command A、Falcon 2 11B"
+    },
+    {
+      "id": "pdf_head_ratio",
+      "modality": "pdf",
+      "question": "头维度乘头数约等于模型维度这个 1:1 比例，有哪些反面论文，讲义怎么回应？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            43,
+            44
+          ]
+        }
+      ],
+      "annotation_evidence": "p44：”There have been papers written against the 1-1 ratio [Bhojanapalli et al 2020] But we don't seem to be seeing significant 'low rank bottlenecks' in practice”"
+    },
+    {
+      "id": "pdf_vocab",
+      "modality": "pdf",
+      "question": "单语模型与多语/生产系统的词表规模各在什么区间？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            48
+          ]
+        }
+      ],
+      "annotation_evidence": "p48：”Monolingual models – 30-50k vocab”；”Multilingual / production systems 100-250k”"
+    },
+    {
+      "id": "pdf_zloss",
+      "modality": "pdf",
+      "question": "输出 softmax 的 z-loss 是哪家模型率先使用的，它压的是什么量？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            55
+          ]
+        }
+      ],
+      "annotation_evidence": "p55：”Output softmax stability – the 'z-loss'… PaLM pioneered this 'z loss' trick”，示意图给的是 softmax 分母的对数平方"
+    },
+    {
+      "id": "pdf_qk_norm",
+      "modality": "pdf",
+      "question": "注意力 softmax 之前对 query 和 key 做归一化的做法来自哪个领域，后来被哪些模型采用？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            56
+          ]
+        }
+      ],
+      "annotation_evidence": "p56：”The query and keys are Layer (RMS) normed before going into the softmax operation… Originally from vision and multimodal models”"
+    },
+    {
+      "id": "pdf_interleave",
+      "modality": "pdf",
+      "question": "Cohere Command A 每四层放一层全注意力，长程与短程信息分别靠什么位置编码拿到？",
+      "expected": [
+        {
+          "asset": "cs_pdf",
+          "pages": [
+            67
+          ]
+        }
+      ],
+      "annotation_evidence": "p67：”Every 4th layer is a full attention. Long-range info via NoPE, short-range info via RoPE + SWA”"
+    },
+    {
+      "id": "regularization",
+      "modality": "pdf",
+      "question": "为什么正则化偏好简单模型？",
+      "expected": [
+        {
+          "asset": "optimization",
+          "pages": [
+            14,
+            15,
+            16
+          ]
+        }
+      ],
+      "annotation_evidence": "optimization.pdf p14 标题 Prefer Simpler Models；p15 正文“pushes against fitting the data too well”；p16 Occam’s razor"
+    },
+    {
+      "id": "opt_adamw",
+      "modality": "pdf",
+      "question": "AdamW 和标准 Adam 的差别在于 L2 惩罚被放进了哪一步？",
+      "expected": [
+        {
+          "asset": "optimization",
+          "pages": [
+            73,
+            74
+          ]
+        }
+      ],
+      "annotation_evidence": "p74：”Standard Adam computes L2 here… Used during moment calculations!”；对比页 p75 把衰减直接作用在参数上"
+    },
+    {
+      "id": "opt_step_decay",
+      "modality": "pdf",
+      "question": "ResNet 训练在第 30、60、90 轮各把学习率乘 0.1，这属于哪种衰减策略？",
+      "expected": [
+        {
+          "asset": "optimization",
+          "pages": [
+            80
+          ]
+        }
+      ],
+      "annotation_evidence": "p80：”Step: Reduce learning rate at a few fixed points. E.g. for ResNets, multiply LR by 0.1 after epochs 30, 60, and 90.”"
+    },
+    {
+      "id": "opt_nesterov",
+      "modality": "pdf",
+      "question": "Nesterov 动量与普通动量的区别是在哪一点上算梯度？",
+      "expected": [
+        {
+          "asset": "optimization",
+          "pages": [
+            101,
+            102
+          ]
+        }
+      ],
+      "annotation_evidence": "p101/102：”Look ahead to the point where updating using velocity would take us; compute gradient there and mix it with velocity”"
+    },
+    {
+      "id": "opt_adagrad",
+      "modality": "pdf",
+      "question": "AdaGrad 凭什么做到逐参数学习率，RMSProp 相对它改了什么？",
+      "expected": [
+        {
+          "asset": "optimization",
+          "pages": [
+            106,
+            111
+          ]
+        }
+      ],
+      "annotation_evidence": "p106：”element-wise scaling of the gradient based on the historical sum of squares…per-parameter learning rates”；p111 标题为 ”RMSProp: 'Leaky AdaGrad'”"
+    },
+    {
+      "id": "opt_bias_correction",
+      "modality": "pdf",
+      "question": "Adam 的一阶、二阶矩估计为什么要做偏差修正？",
+      "expected": [
+        {
+          "asset": "optimization",
+          "pages": [
+            68,
+            69
+          ]
+        }
+      ],
+      "annotation_evidence": "p69：”Bias correction for the fact that first and second moment estimates start at zero”"
+    },
+    {
+      "id": "matrix_scan",
+      "modality": "image",
+      "question": "矩阵乘法 A2x3 B3x4 结果的形状",
+      "expected": [
+        {
+          "asset": "worksheet",
+          "pages": [
+            1
+          ]
+        }
+      ],
+      "unretrievable": {
+        "reason": "worksheet.pdf 为纯图页，文字层为空，chunks=0",
+        "readable_by": "inspect_page 看图，不经文字检索"
+      }
+    },
+    {
+      "id": "dot_product",
+      "modality": "text",
+      "question": "英文笔记中内积和矩阵乘法的区别",
+      "expected": [
+        {
+          "asset": "notes"
+        }
+      ]
+    },
+    {
+      "id": "absent_gpu",
+      "modality": "none",
+      "question": "这门课程是否有我的4060上pre-norm的精确实测加速倍数？",
+      "expected": [],
+      "negative": true
+    },
+    {
+      "id": "absent_exam",
+      "modality": "none",
+      "question": "课程下次考试的个人座位号是什么？",
+      "expected": [],
+      "negative": true
+    },
+    {
+      "id": "absent_office",
+      "modality": "none",
+      "question": "两门课的讲者各自的办公室门牌号是多少？",
+      "expected": [],
+      "annotation_evidence": "讲义与讲稿均无办公室信息；用于观察无标注负例的最高分是否低于命中题的最低分。"
+    },
+    {
+      "id": "video_opt_exception",
+      "modality": "video",
+      "question": "视频里说哪个模型是 pre-norm 的特例，它当时出了什么问题？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            424,
+            432
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 423.6-432.0 秒：”The one exception is OPT 350M, which I'm guessing, they kind of messed that one up, and that was sort of orphaned when they were training.” 原 v3 标注为切片 70-82 秒，按切片起点 353 秒换算为原片 423-435 秒；落在 chunk 398.2-441.0 秒内。"
+    },
+    {
+      "id": "video_warmup",
+      "modality": "video",
+      "question": "讲者说 post-norm 训练不够稳定时，通常要配合什么做法？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            441.5,
+            453
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 441.0-453.0 秒：”if you wanted to use this post-norm stuff, it was much less stable. And so you would have to do some careful learning rate warm-up style things.” 原 v3 标注 89-99 秒（切片时间基）换算为原片 442-452 秒；落在 chunk 441.0-482.5 秒内。"
+    },
+    {
+      "id": "video_cite_papers",
+      "modality": "video",
+      "question": "视频里讲者说支持 pre-norm 的两篇工作分别是谁的？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            455.9,
+            465.3
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 455.9-465.3 秒：”some of the earlier papers arguing for this pre-norm approach, Salazar and Yen, and also this Shiong in 2020 paper”（Shiong 为 Xiong 的识别写法）。原 v3 标注 102-113 秒换算为原片 455-466 秒；落在 chunk 441.0-482.5 秒内。"
+    },
+    {
+      "id": "video_grad_norm_spike",
+      "modality": "video",
+      "question": "讲者说训练不稳定除了 loss 出现尖峰，图上还看到哪个量在飙升？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            530,
+            540
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 526.1-540 秒：”you would see a lot more loss spikes…So you see the gradient norm here spiking and generally higher”；目标区间落在 chunk 526.1-570.2 秒内。"
+    },
+    {
+      "id": "video_rope_inner",
+      "modality": "video",
+      "question": "RoPE 为什么只做旋转就能保住相对位置信息？讲者用哪个量不变来说明？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            2156.2,
+            2171.7
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 2156.2-2171.7 秒：”they have the same relative angle. So their inner products are preserved…You just rotate the vectors”；落在 chunk 2139.0-2182.4 秒内。"
+    },
+    {
+      "id": "video_rope_theta",
+      "modality": "video",
+      "question": "RoPE 把隐藏维按几维一组切开，每组按什么角度旋转？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            2205.8,
+            2219.4
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 2205.8-2219.4 秒：”cut it up into blocks of two dimensions…every two dimension is going to be rotated by some theta. So there's going to be a rotation speed”；落在 chunk 2182.4-2224.2 秒内。"
+    },
+    {
+      "id": "video_zloss_devlin",
+      "modality": "video",
+      "question": "讲者把 z-loss 的做法追溯到哪一年、谁的哪类论文？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            4089,
+            4105
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 4088.8-4105 秒：”I've gone back to Devlin in 2014, where in a machine translation paper, their goal was to try to make s[tuff stable]”；落在 chunk 4088.8-4132.4 秒内。"
+    },
+    {
+      "id": "video_arith_intensity",
+      "modality": "video",
+      "question": "讲者说算术强度要高，具体指什么？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            4680.6,
+            4692.6
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 4680.6-4692.6 秒：”This idea called arithmetic intensity…we want to be doing a lot of compute for every single memory access that we do”；落在 chunk 4647.6-4692.6 秒内。"
+    },
+    {
+      "id": "video_sliding_window",
+      "modality": "video",
+      "question": "sliding window attention 在每一层只让当前位置关注哪里？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            5120.3,
+            5126
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 5120.2-5126 秒：”you only pay attention to a small region around your current position”；落在 chunk 5120.2-5163.6 秒内。"
+    },
+    {
+      "id": "video_aspect_ratio",
+      "modality": "video",
+      "question": "讲超参时说 aspect ratio 是在哪两种形态之间取舍？",
+      "expected": [
+        {
+          "asset": "cs_video",
+          "seconds": [
+            3031.1,
+            3043.4
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 3031.1-3043.4 秒：”one of the big ones in terms of hyper-parameters is the aspect ratio…We can have more and more layers, or we can have wide networks”；落在 chunk 3003.8-3045.6 秒内。"
+    },
+    {
+      "id": "video_tool_example",
+      "modality": "video",
+      "question": "视频里举例的工具函数叫什么名字，它查什么？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            3085,
+            3092
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 3084.7-3092.5 秒：”有一個函式叫做Temperature，他可以查某個地點某個時間的溫度”；落在 chunk 3048.0-3092.5 秒內。原先标注的 55-70 秒是按 270 秒切片的时间基，换成整讲后需按原片秒数重标。"
+    },
+    {
+      "id": "video_system_prompt",
+      "modality": "video",
+      "question": "系统提示词与用户提示词的区别是什么，哪一个每次都一样？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            3127,
+            3156
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 3126.3-3156.3 秒：”這個是User Prompt…你的輸入要分成System Prompt跟User Prompt…System Prompt指的是你在開發應用的時候下的Prompt，每次都一樣，每次都想放在語言模型最前面”；落在 chunk 3126.3-3170.7 秒內。"
+    },
+    {
+      "id": "zh_agent_def",
+      "modality": "video",
+      "question": "讲者认为 AI agent 要完成的目标通常具备哪两个特征？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            122,
+            139
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 122.6-139.9 秒：”要達成的目標是需要透過多個步驟跟環境做很複雜的互動才能夠完成／環境會有一些不可預測的地方／要能夠靈活根據現在的狀況調整計畫”；落在 chunk 104.3-148.8 秒內。"
+    },
+    {
+      "id": "zh_autogpt",
+      "modality": "video",
+      "question": "2023 年春天那一波 agent 热潮里，讲者说最有名的是哪个系统？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            771,
+            782
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 771-782 秒：”在2023年的春天就有一波AI agent的熱潮…那個時候最有名的就是Auto GPT”；落在 chunk 757.4-800.8 秒內。"
+    },
+    {
+      "id": "zh_virtual_village",
+      "modality": "video",
+      "question": "用 AI 村民组成的那个虚拟村庄是哪一年成立的？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            968,
+            976
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 968-976 秒：”就是用AI村民所組成的一個虛擬村莊／這個虛擬村莊是在什麼時候成立的呢／2023年”；落在 chunk 932.3-976.4 秒內。"
+    },
+    {
+      "id": "zh_memory_rag",
+      "modality": "video",
+      "question": "讲者说 agent 的长期记忆本质上是什么，跟哪个技术没有不同？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            2040,
+            2052
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 2040.8-2052.9 秒：”模型的AI agent的memory長期記憶其實就是資料庫…拿這個檢索系統根據這個問題從資料庫裡檢索”；落在 chunk 2031.5-2075.9 秒內。"
+    },
+    {
+      "id": "zh_streambench",
+      "modality": "video",
+      "question": "StreamBench 的发现是：告诉模型做错了、还是告诉它怎么做对，哪种回馈有效？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            2402,
+            2413
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 2402.9-2413.2 秒：”這也符合Streambench的發現就是負面的例子比較沒有效／與其告訴他什麼做錯不如告訴他怎麼做是對的”；落在 chunk 2379.9-2423.1 秒內。"
+    },
+    {
+      "id": "zh_reflection",
+      "modality": "video",
+      "question": "记忆相关的第三个模块被暂时叫什么，它的工作是什么？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            2531,
+            2540
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 2531.6-2540.8 秒：”我們可以暫時叫他reflection反思的模組／這個模組的工作是對記憶中的資訊做更好的[整理]”；落在 chunk 2510.7-2554.1 秒內。"
+    },
+    {
+      "id": "zh_hipporag",
+      "modality": "video",
+      "question": "HippoRAG 这个名字取自人脑的哪个结构？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            2649,
+            2659
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 2649.9-2659.7 秒：”這個HIPO不是指真正的荷馬，他指的應該是那個海馬迴，那個人腦中的一個結構”；落在 chunk 2642.3-2684.1 秒內。"
+    },
+    {
+      "id": "zh_tool_def",
+      "modality": "video",
+      "question": "讲者怎么定义工具：使用者需要了解工具内部怎么运作吗？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            2886,
+            2900
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 2886.3-2900.9 秒：”所謂的工具就是這個東西／你只要知道怎麼使用他就好／他內部怎麼運作的你完全不用管”；落在 chunk 2858.6-2901.0 秒內。"
+    },
+    {
+      "id": "zh_many_tools",
+      "modality": "video",
+      "question": "可用工具有上百上千个时，讲者说该让模型先读完所有说明书吗，还是怎么选？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            3495,
+            3506
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 3495.2-3506.2 秒：”假設現在可以用的工具有上百個上千個／那你豈不是要先讓語言模型讀完上百個上千個工具的使用說明書才開始做事嗎”；落在 chunk 3478.3-3521.1 秒內。"
+    },
+    {
+      "id": "zh_glue_pizza",
+      "modality": "video",
+      "question": "讲者用哪个例子说明 AI Overview 给出荒谬建议，它建议用什么把起司黏在披萨上？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            3723,
+            3735
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 3723.1-3735.1 秒：”AI Overview就說弄個膠水把它黏上去就好了…要用無毒的膠水才可以”；落在 chunk 3694.0-3736.8 秒內。"
+    },
+    {
+      "id": "zh_dose_belief",
+      "modality": "video",
+      "question": "把医学报告里的 30 毫克改成两倍之后，模型为什么改信报告而不信自己的知识？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            3967,
+            3977
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 3967.0-3977.3 秒：”但你把30毫克乘兩變變成60毫克…他相信這個報告裡面寫的，這個時候他就不相信自己的內部資訊”；落在 chunk 3958.3-4001.4 秒內。"
+    },
+    {
+      "id": "zh_recency",
+      "modality": "video",
+      "question": "两篇文章内容相同、只把发布时间对调成 2024 与 2020，模型倾向相信哪一篇？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            4199,
+            4212
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 4199.7-4212.7 秒：”發佈時間從2024改成2020…這個時候語言模型傾向於相信右邊這篇文章的內容”；落在 chunk 4178.9-4223.4 秒內。"
+    },
+    {
+      "id": "zh_blocksworld",
+      "modality": "video",
+      "question": "在这类方块世界任务上，讲者说只有哪个模型能拿到 0.6% 的成功率？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            5280,
+            5286
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 5280.3-5286.3 秒：”只有GPT4 Turbo可以得到0.6%的成功率”；落在 chunk 5254.5-5299.1 秒内。"
+    },
+    {
+      "id": "zh_solver",
+      "modality": "video",
+      "question": "复杂旅游规划任务里，讲者建议把搜索交给谁、语言模型负责什么？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            5401,
+            5416
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 5401.1-5416.2 秒：”不要交給語言模型來做了，交給一個現成的solver…語言模型做的事情是寫一個程式，用這個程式去操控現成的solver”；落在 chunk 5383.6-5426.8 秒內。"
+    },
+    {
+      "id": "zh_dream",
+      "modality": "video",
+      "question": "讲者说一种可能是让刚才一切的尝试都发生在哪里？",
+      "expected": [
+        {
+          "asset": "zh_video",
+          "seconds": [
+            5680,
+            5688
+          ]
+        }
+      ],
+      "annotation_evidence": "字幕 5679.1-5688.1 秒：”讓剛才一切的嘗試都發生在夢境中／都發生在腦內的[劇場]”；落在 chunk 5643.2-5688.1 秒內。"
+    },
+    {
+      "id": "cs4_rnn_form",
+      "modality": "video",
+      "question": "第四讲把线性注意力里那个稠密矩阵乘改写成了什么等价形式？状态是怎么一步步累积的？",
+      "expected": [
+        {
+          "asset": "cs4_video",
+          "seconds": [
+            501,
+            543
+          ]
+        }
+      ],
+      "annotation_evidence": "500.8-543.5 秒：“in the self-attention case, looks just like on R and N… I can write it incrementally. As I sweep left to right on my context, I can multiply my k's and v's, and I can update this thing S, which is a state.” 即增量式 RNN 形式：S 逐位累加 k·v，再乘 Q 得输出，与稠密形式等价。"
+    },
+    {
+      "id": "cs4_mamba_inspiration",
+      "modality": "video",
+      "question": "讲师说线性注意力有一个主要问题，这个问题的灵感来自早期哪种模型，加了什么机制？",
+      "expected": [
+        {
+          "asset": "cs4_video",
+          "seconds": [
+            721,
+            758
+          ]
+        }
+      ],
+      "annotation_evidence": "720.1-758.1 秒：“the main problem with linear attention is that I'm always passing my state forward… We know from like the olden days of LSTMs that it's important to know when to pass information forward and when to just not pass information forward, to forget things and send them to zero.” 灵感来自 LSTM 的遗忘门。"
+    },
+    {
+      "id": "cs4_mamba_gate_dep",
+      "modality": "video",
+      "question": "Mamba 2 加进去的那个门控量依赖当前输入还是依赖状态？讲师强调这一点对计算意味着什么？",
+      "expected": [
+        {
+          "asset": "cs4_video",
+          "seconds": [
+            759,
+            797
+          ]
+        }
+      ],
+      "annotation_evidence": "758.1-797.1 秒：“Gamma of t is not stateful. Gamma of t only depends on my current inputs x of t… the state dependent terms are all these s's. This gamma is not state dependent at all. So this means that this is very simple to compute.” 同时保留了稠密矩阵乘与推理时 recurrent 形式的对偶性。"
+    },
+    {
+      "id": "cs4_moe_parallel",
+      "modality": "video",
+      "question": "混合专家为什么被说成多提供了一个并行化的轴？大模型为什么需要这个轴？",
+      "expected": [
+        {
+          "asset": "cs4_video",
+          "seconds": [
+            2371,
+            2412
+          ]
+        }
+      ],
+      "annotation_evidence": "2370.3-2412.6 秒：“MOEs give you another axis of parallelization… LOMs are very big. They don't fit in single devices, either to train or inference.”"
+    },
+    {
+      "id": "cs4_moe_training",
+      "modality": "video",
+      "question": "混合专家在训练阶段最难的地方是什么？为什么说它有点像强化学习的 bandit 问题？",
+      "expected": [
+        {
+          "asset": "cs4_video",
+          "seconds": [
+            2542,
+            2586
+          ]
+        }
+      ],
+      "annotation_evidence": "2541.8-2586.2 秒：“During training, they are also sparse… you only have one or K experts active. So you don't know what happened with the rest of them.” 接着 2586.2 起说明因此必须学会路由，“it's kind of got this RL bandit flavor”。"
+    },
+    {
+      "id": "cs4_ssm_downside",
+      "modality": "video",
+      "question": "状态空间模型相对 Transformer 的取舍在哪里？讲师说关键在于状态大小和什么的关系？",
+      "expected": [
+        {
+          "asset": "cs4_video",
+          "seconds": [
+            2022,
+            2066
+          ]
+        }
+      ],
+      "annotation_evidence": "2021.6-2066.2 秒：“in state-based, you have to basically kind of think about the context length relative to the size of your state… if you want a really tiny state, it's really hard to compress all the information in a big context.”"
+    },
+    {
+      "id": "cs9_chinchilla_ratio",
+      "modality": "video",
+      "question": "Chinchilla 给出的 token 数和参数量的倍率是多少？它推翻了之前什么做法？",
+      "expected": [
+        {
+          "asset": "cs9_video",
+          "seconds": [
+            3685,
+            3729
+          ]
+        }
+      ],
+      "annotation_evidence": "3684.6-3729.1 秒：“some folks at DeepMind, Hoffman… they said, well, actually, these predictions are all terribly off… those are way too big… It's 20 tokens to every parameter.” 即 20 tokens/参数，此前在训过大的模型。"
+    },
+    {
+      "id": "cs9_fit_methods",
+      "modality": "video",
+      "question": "Chinchilla 用了几种不同的方式拟合缩放律？讲师为什么说这是个好做法？",
+      "expected": [
+        {
+          "asset": "cs9_video",
+          "seconds": [
+            3730,
+            3773
+          ]
+        }
+      ],
+      "annotation_evidence": "3729.1-3773.7 秒：“The Chinchilla author suggests three different ways of fitting scaling loss… it's a way of robustifying yourself to modeling assumptions you may have made.” 三种方式在这一点上互为稳健性检验。"
+    },
+    {
+      "id": "cs9_disagree",
+      "modality": "video",
+      "question": "Kaplan 和 Chinchilla 的结论为什么差那么多？讲师给出的两个原因是什么？",
+      "expected": [
+        {
+          "asset": "cs9_video",
+          "seconds": [
+            4293,
+            4333
+          ]
+        }
+      ],
+      "annotation_evidence": "4292.6-4333.5 秒：“One is that Kaplan is operating at a much lower compute scale. So they're very sensitive to small changes. And actually, ignoring the non-embedding parameter is a sufficiently big change to mess up the result.”"
+    },
+    {
+      "id": "cs9_method3",
+      "modality": "video",
+      "question": "Chinchilla 第三种拟合方式和前两种对不上，这个疑点后来是谁、怎么查清的？结论是什么？",
+      "expected": [
+        {
+          "asset": "cs9_video",
+          "seconds": [
+            4377,
+            4419
+          ]
+        }
+      ],
+      "annotation_evidence": "4376.8-4419.8 秒起：Epoch AI 拿不到原始数据和代码，于是“extracted the data from plots in the paper, and they refitted the method three regressions”；4419.8-4461.7 秒结论是“the original paper must have underfitted”，重拟合后几乎正好得到每参数 20 token。"
+    },
+    {
+      "id": "cs9_no_chinchilla",
+      "modality": "video",
+      "question": "既然 20:1 是算力最优，为什么实际部署的前沿模型不按这个比例训练？",
+      "expected": [
+        {
+          "asset": "cs9_video",
+          "seconds": [
+            4462,
+            4505
+          ]
+        }
+      ],
+      "annotation_evidence": "4461.7-4505.3 秒：“if you're training a production model, you don't really care about saving training compute… Most of the compute is actually going into R&D and serving… you want small models that are capable.” 因此要故意 over-train。"
+    },
+    {
+      "id": "cs9_isoflops",
+      "modality": "video",
+      "question": "讲师说如果要决定各种权衡，最推荐的默认实验设计是什么？为什么它好用？",
+      "expected": [
+        {
+          "asset": "cs9_video",
+          "seconds": [
+            4551,
+            4595
+          ]
+        }
+      ],
+      "annotation_evidence": "4550.1-4595.0 秒：“Isoflops have been one of the things that I think has a research tool have endured. Isoflops are very easy to execute… You fix a flotswaget, and then you sweep over all of the other degrees of freedom.”"
+    },
+    {
+      "id": "cs10_ttft",
+      "modality": "video",
+      "question": "衡量推理速度的几个指标分别是什么？哪一个决定用户干等多久才看到第一个字？",
+      "expected": [
+        {
+          "asset": "cs10_video",
+          "seconds": [
+            314,
+            356
+          ]
+        }
+      ],
+      "annotation_evidence": "313.6-356.6 秒：“one metric of fast is time to first token or TTFT. This is essentially how long a user waits before any generation happens… useful for interactive applications because that latency, where you're just waiting and doing nothing.” 另两个是延迟与吞吐。"
+    },
+    {
+      "id": "cs10_batch_bus",
+      "modality": "video",
+      "question": "增大批大小为什么会让单个用户变慢、却让整体吞吐变好？讲师用了什么比喻？",
+      "expected": [
+        {
+          "asset": "cs10_video",
+          "seconds": [
+            2624,
+            2665
+          ]
+        }
+      ],
+      "annotation_evidence": "2623.7-2665.5 秒：“you have to wait for everyone to finish… you're like waiting for a bus. The latency is pretty high… whereas the throughput of a bus is pretty good… the parameters are shared, and you load that once into memory.”"
+    },
+    {
+      "id": "cs10_batch_limit",
+      "modality": "video",
+      "question": "批大小不能一直往上加，硬限制是什么？到顶之后吞吐还会继续涨吗？",
+      "expected": [
+        {
+          "asset": "cs10_video",
+          "seconds": [
+            2539,
+            2579
+          ]
+        }
+      ],
+      "annotation_evidence": "2538.4-2579.7 秒：“the main problem here is that your memory, you run out of memory. Because the memory for storing this KV cache is going to exceed your H100 memory… you never get the sort of the asymptote, because you'll hit the memory.”"
+    },
+    {
+      "id": "cs10_speculative",
+      "modality": "video",
+      "question": "投机解码利用了哪一种不对称性？草稿模型和目标模型各做什么？",
+      "expected": [
+        {
+          "asset": "cs10_video",
+          "seconds": [
+            4315,
+            4359
+          ]
+        }
+      ],
+      "annotation_evidence": "4314.9-4359.9 秒：“if you're doing pre-fill, you can code all the tokens in parallel… in generation, it's one at a time… checking is faster than generation… use a cheap draft model to basically generate from the guest a few tokens, let's say four tokens.”"
+    },
+    {
+      "id": "cs10_quant",
+      "modality": "video",
+      "question": "量化感知训练和训练后量化有什么区别？前者要付出什么代价？",
+      "expected": [
+        {
+          "asset": "cs10_video",
+          "seconds": [
+            3929,
+            3970
+          ]
+        }
+      ],
+      "annotation_evidence": "3928.0-3970.7 秒：“you quantize and de-quantize… simulating these quantization errors as you train… but the con is that requires expensive, large cell training.” 与之相对通常做法是训练完再量化（post-training quantization），便宜得多。"
+    },
+    {
+      "id": "cs10_kv_recipe",
+      "modality": "video",
+      "question": "第十讲列了哪几类把 KV cache 变小的办法，前提是什么？",
+      "expected": [
+        {
+          "asset": "cs10_video",
+          "seconds": [
+            3840,
+            3884
+          ]
+        }
+      ],
+      "annotation_evidence": "3839.5-3884.2 秒：“And the key is to do this without hurting accuracy. So you can do lower-dimensional KV caches across layers by across heads and across like head dimension. You can do local attention. You can do linear attention.”"
+    },
+    {
+      "id": "hyf_scope",
+      "modality": "video",
+      "question": "这堂课讲的是训练加速还是生成加速？它假设你已经知道什么？",
+      "expected": [
+        {
+          "asset": "hy_flash",
+          "seconds": [
+            1,
+            43
+          ]
+        }
+      ],
+      "annotation_evidence": "0-43 秒：“怎麼加快語言模型的生成速度… 是預設你已經非常清楚語言模型內部的運作原理… 今天這一堂課不是要講訓練的過程，而是假設一個語言模型已經被訓練好以後，我們怎麼加快它生成的速度。”"
+    },
+    {
+      "id": "hyf_cost",
+      "modality": "video",
+      "question": "看到一个加速方法，应该先问什么？讲师举的其中一种代价是改动了什么？",
+      "expected": [
+        {
+          "asset": "hy_flash",
+          "seconds": [
+            217,
+            259
+          ]
+        }
+      ],
+      "annotation_evidence": "216-260 秒：“你要問的事情是代價是什麼… 他用一個你可能比較不關心的資源來換取加速… 有一些方法它伴隨的代價是它會改變 self-attention 的計算，也就是它不是真的計算 self-attention。”"
+    },
+    {
+      "id": "hyf_sram_limit",
+      "modality": "video",
+      "question": "工作台上为什么不能放跟序列长度有关的东西？讲师为什么强调连一个数都不能放？",
+      "expected": [
+        {
+          "asset": "hy_flash",
+          "seconds": [
+            873,
+            916
+          ]
+        }
+      ],
+      "annotation_evidence": "873-916 秒：“工作台上不能放任何跟長度 L、跟 sequence 的長度 L 有關的東西… 你會覺得這些數值可以放到工作台上，是因為在這個例子裡面只放了 9 個數值。在實際上語言模型運算的時候，這個長度可能是 10 萬，可能是 100 萬。”"
+    },
+    {
+      "id": "hyf_rescale",
+      "modality": "video",
+      "question": "每个分块各自把当前最大值当作全局最大值来算，前面那些分块的结果就错了。讲师怎么修？",
+      "expected": [
+        {
+          "asset": "hy_flash",
+          "seconds": [
+            1525,
+            1567
+          ]
+        }
+      ],
+      "annotation_evidence": "1525-1567 秒：“這個 S_1 顯然就是錯的… 你不能夠把前一個 chunk 的這些數值再讀進來重算，這就是浪費讀寫的時間… 這個 S_1 後面乘上 Exponential(D_1 - D_2)，就好像什麼事都沒有發生。”"
+    },
+    {
+      "id": "hyf_rescale_math",
+      "modality": "video",
+      "question": "为什么乘上那个指数项就能把“之前把 D_1 当成最大值”的痕迹抹掉？",
+      "expected": [
+        {
+          "asset": "hy_flash",
+          "seconds": [
+            1568,
+            1610
+          ]
+        }
+      ],
+      "annotation_evidence": "1567-1610 秒：把 S_1 = Σ exp(A_i − D_1) 乘上 exp(D_1 − D_2)，指数项相消，“變成 summation over i 等於 1 到 N，Exponential(A_i - D_2)”，于是等价于一开始就把 D_2 当最大值。"
+    },
+    {
+      "id": "hyf_default",
+      "modality": "video",
+      "question": "在 PyTorch 里跑 Transformer，默认用的是不是 Flash Attention？要关掉它得怎么做？",
+      "expected": [
+        {
+          "asset": "hy_flash",
+          "seconds": [
+            2446,
+            2490
+          ]
+        }
+      ],
+      "annotation_evidence": "2446-2490 秒：“如果沒有做特別的設置，它一般就是直接用 Flash Attention… 如果你不要用 Flash Attention，你其實是需要特別做設置的。” 对应的函数是 scaled_dot_product_attention。"
+    },
+    {
+      "id": "hyk_why_store",
+      "modality": "video",
+      "question": "生成每个新 token 时，为什么要把 K 和 V 存下来，而不是每次重新算？",
+      "expected": [
+        {
+          "asset": "hy_kv",
+          "seconds": [
+            181,
+            224
+          ]
+        }
+      ],
+      "annotation_evidence": "180-225 秒：“接前面的 Token 再一起丟進 Language Model，再重新算 V 跟 K 的話，那實在是太花時間了，所以我們會把 V 跟 K 直接存下來，那就不用再算第二次了。”"
+    },
+    {
+      "id": "hyk_per_token",
+      "modality": "video",
+      "question": "以 46 层、30 个 head、128 维、FP16 存为例，每产生一个 token 的 KV cache 大约占多少？80GB 的卡大概能放多少 token？",
+      "expected": [
+        {
+          "asset": "hy_kv",
+          "seconds": [
+            400,
+            444
+          ]
+        }
+      ],
+      "annotation_evidence": "400-444 秒：“有 Value 有 Key，所以要乘以 2，這樣算完之後呢，是 736 KB，也就是 0.72 MB… A100 有 80 GB 的 Memory，其實也只夠你存 114k 個，也就大概 10 萬個 Token 而已。”"
+    },
+    {
+      "id": "hyk_prefix",
+      "modality": "video",
+      "question": "如果改动提示词开头的前缀会怎样？为什么 AI agent 反而容易吃到缓存？",
+      "expected": [
+        {
+          "asset": "hy_kv",
+          "seconds": [
+            1805,
+            1849
+          ]
+        }
+      ],
+      "annotation_evidence": "1805-1849 秒：“如果你改變了它的前綴，你就會破壞整個 cache 的結果… 你就沒有辦法打折。那可以想說，只有前綴一樣才能打折… 如果是 AI agent 的話，就非常有可能前綴一樣”，因为system prompt 很长但内容通常不变。"
+    },
+    {
+      "id": "hyk_discount",
+      "modality": "video",
+      "question": "以 GPT-4o 为例，命中缓存的输入收多少钱？讲师说为什么平台敢给这个折扣？",
+      "expected": [
+        {
+          "asset": "hy_kv",
+          "seconds": [
+            1719,
+            1761
+          ]
+        }
+      ],
+      "annotation_evidence": "1718-1762 秒：正常输入每百万 token 收 2.5 美金，长 sequence 收 5 美金，“如果這個 input 是有 cache 的，那我給你打 10% 的折扣，我只收你十分之一的錢”，原因是 K 跟 V 都已算好，“幾乎不需要做額外的計算”。"
+    },
+    {
+      "id": "hyk_pruning",
+      "modality": "video",
+      "question": "KV cache 剪枝的依据是什么？凭什么可以删掉一部分 Key 和 Value？",
+      "expected": [
+        {
+          "asset": "hy_kv",
+          "seconds": [
+            1410,
+            1452
+          ]
+        }
+      ],
+      "annotation_evidence": "1410-1453 秒：“其實啊，你根本就不需要存那麼多的 Key 跟 Value，多數的 Key 跟 Value 後來都是沒有被用上的，所以我們可以做 KV Cache 的 pruning，把一些沒有用到的 Key 跟 Value 直接從資料庫裡面移除。”"
+    },
+    {
+      "id": "hyk_mqa",
+      "modality": "video",
+      "question": "多查询注意力和分组查询注意力付出的代价是什么？为什么不拿现成模型改一下就能用？",
+      "expected": [
+        {
+          "asset": "hy_kv",
+          "seconds": [
+            2112,
+            2154
+          ]
+        }
+      ],
+      "annotation_evidence": "2111-2155 秒：“都是讓同一組的 Key 跟 Value 可以有多組不同的 query… 這樣子的方法會改變原來的 attention，因為算出來就跟原來的 attention 不一樣了… 你需要對模型做客製化的訓練，也就是說你沒有辦法拿一個現成的模型然後就直接修改它。”"
+    },
+    {
+      "id": "cross_serve_cost",
+      "modality": "video",
+      "question": "第九讲说生产模型要故意训得比 Chinchilla 比例更久，第十讲说服务阶段的瓶颈卡在哪里？",
+      "expected": [
+        {
+          "asset": "cs9_video",
+          "seconds": [
+            4462,
+            4505
+          ]
+        },
+        {
+          "asset": "cs10_video",
+          "seconds": [
+            2539,
+            2579
+          ]
+        }
+      ],
+      "targets_mode": "all",
+      "annotation_evidence": "cs9 4461.7-4505.3 秒：算力主要花在 R&D 和 serving，所以要小而强的模型，即故意 over-train。cs10 2538.4-2579.7 秒：服务阶段批大小受限于“the memory for storing this KV cache is going to exceed your H100 memory”。两条合起来才是“为什么训得久反而更划算”。"
+    },
+    {
+      "id": "cross_flash_kv",
+      "modality": "video",
+      "question": "Flash Attention 和 KV cache 各自省的是哪一类开销？",
+      "expected": [
+        {
+          "asset": "hy_flash",
+          "seconds": [
+            873,
+            916
+          ]
+        },
+        {
+          "asset": "hy_kv",
+          "seconds": [
+            181,
+            224
+          ]
+        }
+      ],
+      "targets_mode": "all",
+      "annotation_evidence": "hy_flash 873-916 秒：省的是分块读写、不把和长度 L 有关的东西放上工作台，即访存开销；hy_kv 180-225 秒：省的是把前面 token 的 K/V 重算一遍，即重复计算。两者一个管 IO，一个管计算复用。"
+    },
+    {
+      "id": "cross_long_context",
+      "modality": "video",
+      "question": "把长上下文压进一个固定大小的状态，和只让注意力看滑动窗口，各自的代价是什么？",
+      "expected": [
+        {
+          "asset": "cs4_video",
+          "seconds": [
+            2022,
+            2066
+          ]
+        },
+        {
+          "asset": "hy_kv",
+          "seconds": [
+            1059,
+            1103
+          ]
+        }
+      ],
+      "targets_mode": "all",
+      "annotation_evidence": "cs4 2021.6-2066.2 秒：状态模型里“context length relative to the size of your state”，状态小就压不住长上下文的信息；hy_kv 1059-1104 秒：滑动窗口“雖然最上面這一層它只看前面兩個 Key，但是… 這個位置其實又多看了前面兩個位置”，靠层数把感受野撑回来，代价是深度。"
+    },
+    {
+      "id": "cross_kv_reduce",
+      "modality": "video",
+      "question": "KV cache 剪枝，和第十讲列的减小 KV cache 的做法，是同一类办法吗？各自的前提是什么？",
+      "expected": [
+        {
+          "asset": "hy_kv",
+          "seconds": [
+            1410,
+            1452
+          ]
+        },
+        {
+          "asset": "cs10_video",
+          "seconds": [
+            3840,
+            3884
+          ]
+        }
+      ],
+      "targets_mode": "all",
+      "annotation_evidence": "hy_kv 1410-1453 秒：剪枝的依据是“多數的 Key 跟 Value 後來都是沒有被用上的”，属于按使用频次丢弃；cs10 3839.5-3884.2 秒：另一类是降低维度、局部注意力、线性注意力，前提是“without hurting accuracy”。前者丢内容，后者改结构。"
+    },
+    {
+      "id": "absent_paged",
+      "modality": "none",
+      "question": "课程里有没有讲 vLLM 的 PagedAttention 是怎么消除 KV cache 的显存碎片的？",
+      "expected": [],
+      "negative": true,
+      "annotation_evidence": "全语料（含 7 讲转写与 3 份 PDF）检索 vLLM / PagedAttention 均 0 命中；KV cache 只讲到大小估算、剪枝、MQA/GQA 与 prompt cache，没有分页管理。"
+    },
+    {
+      "id": "absent_qlora",
+      "modality": "none",
+      "question": "有没有讲 QLoRA 用的 4-bit NormalFloat 数据类型具体怎么量化？",
+      "expected": [],
+      "negative": true,
+      "annotation_evidence": "全语料 QLoRA 与 NormalFloat 均 0 命中；量化部分只讲 FP16/BF16 到 FP4 的精度取舍、量化感知训练与训练后量化，没有 NF4。"
+    },
+    {
+      "id": "absent_selective_scan",
+      "modality": "none",
+      "question": "有没有给出 Mamba 选择性扫描的 CUDA kernel 实现细节？",
+      "expected": [],
+      "negative": true,
+      "annotation_evidence": "全语料 selective scan / CUDA kernel / Triton 均 0 命中；第四讲只从线性注意力的 RNN 形式讲到加门控得到 Mamba 2，没有落到 kernel 实现。"
+    },
+    {
+      "id": "absent_rwkv",
+      "modality": "none",
+      "question": "课程有没有介绍 RWKV 这个线性注意力变体？",
+      "expected": [],
+      "negative": true,
+      "annotation_evidence": "全语料 RWKV 与 RetNet 均 0 命中；线性注意力只讲到 Mamba / gated delta net 这一支。"
+    },
+    {
+      "id": "absent_sampling",
+      "modality": "none",
+      "question": "有没有讲 nucleus 采样（top-p）的参数该怎么设？",
+      "expected": [],
+      "negative": true,
+      "annotation_evidence": "全语料 top-p / top-k sampling / nucleus 均 0 命中；生成部分只讲投机解码与量化，没有讲采样策略。"
+    }
+  ]
+}

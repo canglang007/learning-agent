@@ -201,3 +201,68 @@ def test_learning_core_v2_suite_loads_through_schema():
     assert suite.id == "learning-core-v4"
     assert suite.supersedes == "3"
     assert len(suite.cases) == 28
+
+
+def test_retrieval_v5_covers_every_new_lecture_and_keeps_v4_intact():
+    """v5 是在 v4 上累加，不是换掉：53 题必须原样在、每讲都得有题、跨讲题要有双证据。
+
+    语料从 2 讲扩到 7 讲之后，最容易犯的错是"加了材料但题还压在两讲上"——
+    那样新下的 4.2 小时只是占磁盘，评测根本没看见它。
+    """
+
+    v4 = json.loads((ROOT / "evals" / "retrieval-v4.json").read_text(encoding="utf-8"))
+    v5 = json.loads((ROOT / "evals" / "retrieval-v5.json").read_text(encoding="utf-8"))
+    by_id = {query["id"]: query for query in v5["queries"]}
+    assert len(by_id) == len(v5["queries"]), "v5 里有重复 id"
+    assert v5["supersedes"] == 4 and v5["version"] == 5
+
+    # v4 的每一题都在 v5 里，且内容完全一致——扩样本不能顺手改旧题的标注。
+    for query in v4["queries"]:
+        assert query["id"] in by_id, f"v5 丢了 v4 的题：{query['id']}"
+        assert by_id[query["id"]] == query, f"v5 改动了 v4 的题：{query['id']}"
+
+    durations = {
+        "cs_video": 5223.0,
+        "cs4_video": 5180.4,
+        "cs9_video": 4676.6,
+        "cs10_video": 5129.6,
+        "zh_video": 6120.0,
+        "hy_flash": 2978.7,
+        "hy_kv": 2313.5,
+    }
+    per_asset = {}
+    for query in v5["queries"]:
+        assert query.get("targets_mode", "any") in {"any", "all"}
+        for target in query.get("expected", []):
+            seconds = target.get("seconds")
+            if not seconds:
+                continue
+            per_asset[target["asset"]] = per_asset.get(target["asset"], 0) + 1
+            assert target.get("time_basis", "clip") == "clip", query["id"]
+            low, high = seconds
+            limit = durations[target["asset"]]
+            assert 0 <= low < high <= limit, (query["id"], target["asset"], seconds)
+
+    # 新增的 5 讲每讲至少 5 题，否则"覆盖新素材"名不副实。
+    for asset in ("cs4_video", "cs9_video", "cs10_video", "hy_flash", "hy_kv"):
+        assert per_asset.get(asset, 0) >= 5, f"{asset} 只有 {per_asset.get(asset, 0)} 道题"
+
+    # 跨讲对照题必须是双证据 + all，任一证据缺席就不算命中。
+    cross = [q for q in v5["queries"] if q["id"].startswith("cross_")]
+    assert len(cross) >= 4, "跨讲对照题少于 4 道"
+    for query in cross:
+        assert query.get("targets_mode") == "all", query["id"]
+        assert len(query["expected"]) >= 2, query["id"]
+
+    # 负例要够用：v4 只有 3 道（5.7%），v5 至少 8 道。
+    # 判定口径按"没有可标注目标"算，而不是看 negative 字段——v4 的 absent_office
+    # 就是用 annotation_evidence 说明不可达、没标 negative，检查器也兼容这种写法。
+    negatives = [q for q in v5["queries"] if not q.get("expected")]
+    assert len(negatives) >= 8
+    # 只要求 v5 新增的负例写清依据；v4 的 absent_gpu/absent_exam 是历史题，
+    # 扩样本时不回头改旧数据。
+    v4_ids = {query["id"] for query in v4["queries"]}
+    for query in negatives:
+        assert query["expected"] == [], query["id"]
+        if query["id"] not in v4_ids:
+            assert query.get("annotation_evidence"), f"{query['id']} 没写为什么判为不存在"

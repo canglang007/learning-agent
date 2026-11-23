@@ -13,26 +13,44 @@
 但这个 1.00 站不住：视频资产是两段两三分钟的切片，只有 6 个分块，"从三块里找一块"
 本来就该满分。换成两讲完整原片（87 分钟 + 102 分钟，265 个视频分块）后，17 题扩到
 53 题，视频检索的真实水平是 **BM25 0.56 → 混合 0.74 → 加精排 0.89**，
-全量三档是 **0.57 → 0.65 → 0.84**。下面先给构成，再给这两组数。
+全量三档是 **0.57 → 0.65 → 0.84**。
+
+**再往下扩，数字又降了一次**（v5）：语料从 2 讲扩到 7 讲、467 块扩到 942 块，题目从
+53 题扩到 92 题，全量变成 **BM25 0.40 → 混合 0.55**。降的原因很具体、也很值得记：
+
+- 新增的 34 道标注题里有 19 道漏检，其中 **4 道跨讲对照题一道没中**——它们要求两讲证据
+  同时进前 5（`targets_mode=all`），这是单讲语料根本测不出来的严格性；
+- 第十讲（inference）6 道题漏了 5 道。原因是同一门课的多讲在词汇上高度重叠：MoE 在
+  第四讲和第九讲都讲，KV cache 在第十讲和李宏毅那讲都讲，讲者还是同一个人、同样的口癖；
+- 这三条都不是标注错了，而是**"从 900 多块里找回那一段"的真实难度**。
+
+下面先给构成，再给这几组数。
 
 ## 语料构成
 
-评测语料在 `data/evaluations/multimodal-v1/`，6 份材料（只放被题目用到的材料）：
+评测语料在 `data/evaluations/multimodal-v1/`，11 份材料（只放被题目用到的材料）：
 
 | 资产 | 格式 | 规模 | 可文字检索 | 说明 |
 |---|---|---|---|---|
 | cs336-architecture.pdf | pdf | 68 页 / 69 chunk | 是 | 英文讲义，含架构图页 |
 | optimization.pdf | pdf | 119 页 / 131 chunk | 是 | 英文讲义，含损失面示意图 |
-| cs336-lecture.mp4 | video | **87 分钟 / 121 chunk** | 是（本地 ASR 英文） | 整讲原片，1876 条字幕段 |
+| cs336-lecture.mp4 | video | 87 分钟 / 121 chunk | 是（本地 ASR 英文） | 整讲原片，1876 条字幕段 |
+| cs336-lecture4.mp4 | video | **86 分钟 / 122 chunk** | 是（本地 ASR 英文） | attention alternatives，1592 段 |
+| cs336-lecture9.mp4 | video | **78 分钟 / 108 chunk** | 是（本地 ASR 英文） | scaling laws，1586 段 |
+| cs336-lecture10.mp4 | video | **86 分钟 / 123 chunk** | 是（本地 ASR 英文） | inference，1093 段 |
 | ntu-lecture.mp4 | video | **102 分钟 / 144 chunk** | 是（官方中文字幕） | 整讲原片，2608 条字幕段 |
+| hungyi-flash-attention.mp4 | video | **50 分钟 / 69 chunk** | 是（官方中文字幕） | Flash Attention，1389 段 |
+| hungyi-kv-cache.mp4 | video | **39 分钟 / 53 chunk** | 是（官方中文字幕） | KV Cache，1124 段 |
 | worksheet.pdf | pdf | 1 页 / **0 chunk** | **否** | 纯图页，文字层为空 |
 | study-notes.md | text | 2 chunk | 是 | 英文笔记 |
 
-三点值得注意：
+合计 **942 个分块，其中视频 740 块（78.6%）**，视频总量 6.3 小时。三点值得注意：
 
 1. **粒度差反过来了**：v3 时 PDF 分块是视频的 33 倍（200 : 6），看起来视频不可能有
-   定位精度；换成整讲后视频占 265 / 467 = **57%**，反而变成"视频块把讲义页挤出去"
+   定位精度；换成整讲后视频占 740 / 942 = **78.6%**，反而变成"视频块把讲义页挤出去"
    ——同一个事实在幻灯片和讲稿里各出现一次，是这套语料最需要小心的性质。
+   扩到 7 讲之后还多了一层：**同一门课的不同讲之间也互相挤**（MoE、KV cache、
+   attention 都在两讲里出现），这是第十讲那 5 道漏检的直接原因。
 2. **视频按 40–45 秒切块，切点会落在句子中间**。`video_sliding_window` 那条的漏检
    就是定义句被切成两半，含后半句的块开头是 "to a small region around…"，语义残缺。
 3. **只有 `worksheet.pdf` 是"不可文字检索"的材料**（文字层为空、0 分块），
@@ -42,7 +60,40 @@
    只会在读语料清单时被误当成"图片能力被测过"的证据。它作为输入类型由能力用例
    （`learning-core-v4.json` 的 `silent_video`，经 `bindings.local.json` 绑定）覆盖。
 
-## 分模态指标（v4：整讲语料，53 题）
+## 分模态指标（v5：7 讲语料，92 题）
+
+| 模态 | 题数 | BM25 | 混合 |
+|---|---|---|---|
+| pdf | 21 | 0.52 | 0.52 |
+| video | 61 | 0.36 | **0.57** |
+| text | 1 | 0.00 | 0.00 |
+| image | 1 | 不计分 | 不计分 |
+| 合计（可评分 83） | 83 | 0.40 | **0.55** |
+
+新增的 39 道题（34 标注 + 5 负例）按材料拆分，命中情况如下——**这张表比总分有用**：
+
+| 材料 | 题数 | 混合命中 | 说明 |
+|---|---|---|---|
+| CS336 第四讲（attn alternatives） | 6 | 2 | 线性注意力的 RNN 形式、Mamba 门控能中；MoE 与 SSM 取舍全漏 |
+| CS336 第九讲（scaling laws） | 6 | 2 | 拟合方法与两家分歧能中；Chinchilla 倍率、method 3 查证、over-train 全漏 |
+| CS336 第十讲（inference） | 6 | 1 | 只有量化能中；TTFT、批大小、投机解码全漏 |
+| 李宏毅 Flash Attention | 6 | 5 | 中文讲两讲表现最好，只有分块修正那道漏 |
+| 李宏毅 KV Cache | 6 | 4 | 显存估算、剪枝、MQA 都能中 |
+| 跨讲对照（all 模式） | 4 | **0** | 两讲证据必须同时进前 5，一道没中 |
+
+两个反直觉的地方：
+
+1. **中文两讲明显好于英文三讲**（9/12 vs 5/18）。这三讲英文是本地 ASR 出来的，
+   没有标点断句、术语拼写还有错（"flotswaget" 应是 FLOPs），双塔向量对它的编码
+   比官方字幕差一截。**这不是标注问题，是转写质量直接决定检索质量。**
+2. **跨讲题全灭**是 `all` 模式的设计后果：它要求两个证据都在前 5，而两讲各 100 多块，
+   凑齐的概率远低于单证据。这个 0 不是"检索全错"，而是"还做不到跨材料对照"——
+   要改善得先让单讲命中率上去，而不是放宽判定。
+
+## v4 的 53 题（历史，2026-11-23）
+
+423 块扩到 467 块那一版的数字，保留下来做对照。**注意 v4 的 0.63 与 v5 的 0.55
+不可比**：分母从 49 变到 83，候选池从 467 块变成 942 块，新题本身也系统性地更难。
 
 | 模态 | 题数 | BM25 | 混合 | +精排 |
 |---|---|---|---|---|
@@ -155,10 +206,10 @@ BM25 全空，只有向量能救。** 这正是跨语言检索在视频上的复
 uv sync --extra embed
 export LA_EMBEDDING_CACHE_DIR=~/.cache/la-models
 
-uv run python scripts/check_annotation_targets.py --queries evals/retrieval-v4.json
+uv run python scripts/check_annotation_targets.py --queries evals/retrieval-v5.json
 uv run python scripts/retrieval_report.py \
     --corpus data/evaluations/multimodal-v1/corpus/workspace.db \
-    --queries evals/retrieval-v4.json \
+    --queries evals/retrieval-v5.json \
     --json data/evaluations/multimodal-v1/report.json
 ```
 

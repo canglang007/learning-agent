@@ -17,6 +17,14 @@
 **BM25 0.57 → 混合 0.65 → 加交叉编码器精排 0.84**（49 条可评分，
 `matrix_scan` 是纯图页不计分）。视频仍是差距最大的地方：0.56 → 0.74 → 0.89。
 
+把语料从 2 讲扩到 7 讲、467 块扩到 942 块之后（`evals/retrieval-v5.json`，92 题），
+数字再降一档：**BM25 0.40 → 混合 0.55**（83 条可评分）。这一次降得有据可查——
+新增 34 道标注题漏了 19 道，其中跨讲对照 4 道全灭、第十讲 5/6 漏检，
+而中文两讲反而 9/12 命中。**同一门课多讲入库后，讲与讲之间的词汇重叠成了主要瓶颈**；
+英文三讲走本地 ASR、没有断句和术语修正，编码质量也明显拖后腿。
+v4 的 0.65 与 v5 的 0.55 不可比（分母 49 → 83、候选池翻倍、新题更难），
+拆解见[多模态评测](multimodal-eval.md)。
+
 
 ## 为什么 BM25 不够
 
@@ -287,14 +295,14 @@ v3 时权重 0.9 是在 14 条可评分用例上选的，当时就写明"样本�
 uv sync --extra embed --extra asr
 export LA_EMBEDDING_CACHE_DIR=~/.cache/la-models   # 可选，固定缓存避免重复下载
 
-# 1) 建整讲语料（约 8 分钟，绝大部分花在 ASR；可续跑，已入库的材料会跳过）
+# 1) 建整讲语料（7 讲约 18 分钟，绝大部分花在 ASR；可续跑，已入库的材料会跳过）
 uv run python scripts/build_lecture_corpus.py
 
 # 2) 先校验标注可达，再跑指标
-uv run python scripts/check_annotation_targets.py --queries evals/retrieval-v4.json
+uv run python scripts/check_annotation_targets.py --queries evals/retrieval-v5.json
 uv run python scripts/retrieval_report.py \
     --corpus data/evaluations/multimodal-v1/corpus/workspace.db \
-    --queries evals/retrieval-v4.json \
+    --queries evals/retrieval-v5.json \
     --json data/evaluations/multimodal-v1/report.json
 ```
 
