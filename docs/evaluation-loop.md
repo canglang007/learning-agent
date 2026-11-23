@@ -137,6 +137,8 @@ uv run python -m learning_agent.evaluation gate \
 
 CI 里跑 `scripts/check_evaluation.py`，查任务集结构（id、rubric 版本、split、turn、gold 有没有缺或重）、基线 schema 和指标是否合法、校准集和查询集是不是空的。不调模型，也不依赖被忽略的 `data/`。
 
+它现在还管一件跟结构无关的事：检索集里每道"不可文字检索"的题必须写清客观依据（`unretrievable.reason`）和接管者（`readable_by`），理由里出现"为了让…成立"这类表述直接判失败。历史版本只做基本检查，新规则不回头追究旧数据。为什么值得为这个加一道 CI——[评测完整性](evaluation-integrity.md)里记了事故。
+
 质量门禁我没放进 CI。它要模型调用、课程素材，还要开发复核，每次 push 都跑一遍既不便宜也不可靠。放在本地显式执行更实在。
 
 ## 说之前要交代的
