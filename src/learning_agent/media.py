@@ -16,6 +16,15 @@ from pathlib import Path
 import httpx
 
 MEDIA_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".mp3", ".m4a", ".wav", ".ogg", ".flac"}
+# 浏览器能不能直接播，取决于"容器 + 编码"，不是扩展名。同一个 mkv 里装 h264+aac，
+# 差的只是一层壳（remux 秒级）；一个 mp4 里装 ProRes，反而播不了（必须重编码）。
+# 早先的判据要求"扩展名 mp4 且 h264 且 yuv420p 且 aac"，于是 720p 的 AV1 mp4、
+# 或 h264 装进 mkv，全被判成不可播，白跑一次 libx264 全量重编码——长课程在 1 核上
+# 要几十分钟。这里按能力分级：direct 直接播、remux 只换壳、transcode 才重编码。
+DIRECT_CONTAINERS = {"mp4", "m4a", "m4v", "mov", "webm"}
+DIRECT_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1"}
+DIRECT_AUDIO_CODECS = {"aac", "mp3", "opus", "vorbis"}
+_MP4_SAFE_AUDIO = {"aac", "mp3"}
 _asr_lock = threading.Lock()
 _models = {}
 _worker_lock_fd = ContextVar("worker_lock_fd", default=None)
@@ -66,6 +75,27 @@ def command(args, timeout=180):
         raise MediaError("媒体解码失败或超时，请确认文件完整且编码受支持") from None
 
 
+def playback_plan(suffix, video, audio):
+    """能否在浏览器里直接播：direct 直接播 / remux 只换壳 / transcode 重编码。
+
+    ``suffix`` 用保存下来的文件扩展名判断容器——ffprobe 会把 mkv 报成
+    ``matroska,webm``，只看 format_name 会把 mkv 误判成 webm。
+    """
+    video_codec = (video or {}).get("codec_name")
+    audio_codec = (audio or {}).get("codec_name")
+    if video and video_codec not in DIRECT_VIDEO_CODECS:
+        return "transcode"
+    if video and video_codec == "h264" and video.get("pix_fmt") not in {"yuv420p", "yuvj420p"}:
+        return "transcode"
+    if audio and audio_codec not in DIRECT_AUDIO_CODECS:
+        return "transcode"
+    container = str(suffix).lower().strip()
+    # 传进来的可能是 ".mkv" 也可能带文件名（"colors.mkv"）：Path(".mkv").suffix 是空，
+    # 点开头的字符串会被当成隐藏文件名，所以直接按最后一个点切。
+    container = container[container.rfind(".") + 1 :]
+    return "direct" if container in DIRECT_CONTAINERS else "remux"
+
+
 def probe(path, max_seconds=14400):
     try:
         data = json.loads(
@@ -100,14 +130,15 @@ def probe(path, max_seconds=14400):
         raise MediaError("文件没有可用的音视频轨道")
     if video and int(video.get("width", 0)) * int(video.get("height", 0)) > 3840 * 2160:
         raise MediaError("初版支持最高4K视频，请先降低分辨率")
+    playback = playback_plan(Path(path).suffix, video, audio)
     return {
         "duration": duration,
         "has_video": bool(video),
         "has_audio": bool(audio),
-        "browser_playable": Path(path).suffix.lower() in {".mp4", ".m4a"}
-        and "mp4" in data.get("format", {}).get("format_name", "")
-        and (not video or (video.get("codec_name") == "h264" and video.get("pix_fmt") == "yuv420p"))
-        and (not audio or audio.get("codec_name") == "aac"),
+        "playback": playback,
+        "browser_playable": playback == "direct",
+        "video_codec": (video or {}).get("codec_name"),
+        "audio_codec": (audio or {}).get("codec_name"),
     }
 
 
@@ -137,6 +168,26 @@ def prepare(source, target, info):
     else:
         args += ["-vn", "-c:a", "aac", "-movflags", "+faststart"]
     command([*args, str(target)], timeout=max(600, info["duration"] * 2))
+
+
+def remux(source, target, info):
+    """只换容器：视频流原样复制，音频在 mp4 里不通用时转 aac。
+
+    比 ``prepare`` 快两个数量级（秒级 vs 分钟级），也不损失画质——mkv 装 h264
+    这种"只差一层壳"的文件没必要重编码。
+    """
+    args = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(source)]
+    if info["has_video"]:
+        args += ["-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy"]
+    else:
+        args += ["-vn"]
+    if info["has_audio"]:
+        if (info.get("audio_codec") or "") in _MP4_SAFE_AUDIO:
+            args += ["-c:a", "copy"]
+        else:
+            args += ["-c:a", "aac", "-b:a", "128k"]
+    args += ["-movflags", "+faststart"]
+    command([*args, str(target)], timeout=max(300, info["duration"]))
 
 
 def frame(source, target, seconds):

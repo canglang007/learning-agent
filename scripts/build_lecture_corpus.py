@@ -1,27 +1,29 @@
-"""从零构建整讲课程评测语料：两讲完整原片 + 三份 PDF + 一份笔记。
+"""从零构建整讲课程评测语料：五讲完整原片（两门课）+ 三份 PDF + 一份笔记。
 
 和 ``prepare_multimodal_corpus.py`` 的区别：那份脚本是往既有基线里补一个无声视频，
 这份换掉整个基线。原来的两个视频资产是两三分钟的切片（198 秒 / 270 秒），
-切出来的分块只有 3 个，视频检索实际上是在三选一；这里换成 87 分钟和 102 分钟的
-整讲，分块数量级跟着句子密度走，检索才谈得上"从几百段里找回那一段"。
+切出来的分块只有 3 个，视频检索实际上是在三选一；这里换成整讲，分块数量级跟着
+句子密度走，检索才谈得上"从几百段里找回那一段"。
 
 语料只放**被题目用到的材料**。无声视频 `cs336-prenorm-silent.mp4` 不在这份语料里：
 它在检索题里没有任何目标（0 个分块、0 条题），放进来只会让"语料里有它"看起来像
 某种证据。它属于能力用例的输入（`evals/learning-core-v4.json` 的 `silent_video`），
 由 `bindings.local.json` 单独提供给那条链路。
 
-两讲的字幕来源不同，这是刻意保留的对照：
+五讲的字幕来源刻意不统一，这本身就是对照：
 
-- NTU（中文）有官方 .vtt，直接解析，零推理成本；
-- CS336（英文）没有字幕，走产品自己的 ASR 任务（faster-whisper base、CPU int8、
-  300 秒分片 + 5 秒重叠），所以这份语料同时是转写链路的实测记录。
+- NTU（中文）、李宏毅两讲（中文）有官方 .vtt，直接解析，零推理成本；
+- CS336 2025 一讲、2026 三讲（英文）都没有字幕，走产品自己的 ASR 任务
+  （faster-whisper base、CPU int8、300 秒分片 + 5 秒重叠），所以这份语料同时是
+  转写链路的实测记录。五讲都用同一个 ASR 配置，避免把转写质量差异混进检索难度。
 
 用法：
     uv sync --extra embed --extra asr
     python scripts/build_lecture_corpus.py --root data/evaluations/multimodal-v1/corpus
 
-脚本不删任何东西：目标目录非空时必须显式 --force，且 --force 只是清掉
-materials/ 与 workspace.db，原始视频仍在 data/acceptance/real-courses/ 下。
+脚本可续跑：按材料名跳过已入库的，加新材料不用重跑已有转写。目标目录非空且没加
+``--force`` 时会续跑；``--force`` 只清掉 materials/ 与 workspace.db，原始视频仍在
+``data/acceptance/real-courses/`` 下。
 """
 
 import argparse
@@ -59,6 +61,41 @@ LECTURES = [
         "path": ACCEPT / "real-courses/ntu-original.mp4",
         "url": "https://www.youtube.com/watch?v=M2Yg1kwPpts",
         "captions": ACCEPT / "real-courses/ntu-source.zh-TW.vtt",
+    },
+    # 2026 版 CS336 三讲：同一门课的不同主题（注意力替代方案、scaling、推理）。
+    # 加它们的理由不是"材料越多越好"，而是原来只有一门课的一讲，检索模型可能
+    # 只学到那一讲的措辞；跨主题才能看出检索是在读语义还是在匹配表面词。
+    {
+        "name": "cs336-lecture4.mp4",
+        "path": ACCEPT / "real-courses/cs336-2026/cKSwj_qZ8Jg.mp4",
+        "url": "https://www.youtube.com/watch?v=cKSwj_qZ8Jg",
+        "captions": None,
+    },
+    {
+        "name": "cs336-lecture9.mp4",
+        "path": ACCEPT / "real-courses/cs336-2026/Q15rhEWZPQ4.mp4",
+        "url": "https://www.youtube.com/watch?v=Q15rhEWZPQ4",
+        "captions": None,
+    },
+    {
+        "name": "cs336-lecture10.mp4",
+        "path": ACCEPT / "real-courses/cs336-2026/EfM546A79aM.mp4",
+        "url": "https://www.youtube.com/watch?v=EfM546A79aM",
+        "captions": None,
+    },
+    # 李宏毅这两讲是同一主题的上下篇（Flash Attention / KV Cache），官方繁体字幕。
+    # 跨讲对照类题目（"两种加速各自优化什么"）只有在多讲语料里才出得来。
+    {
+        "name": "hungyi-flash-attention.mp4",
+        "path": ACCEPT / "real-courses/hungyi-2025/vXb2QYOUzl4.mp4",
+        "url": "https://www.youtube.com/watch?v=vXb2QYOUzl4",
+        "captions": ACCEPT / "real-courses/hungyi-2025/vXb2QYOUzl4.zh-TW.vtt",
+    },
+    {
+        "name": "hungyi-kv-cache.mp4",
+        "path": ACCEPT / "real-courses/hungyi-2025/fDQaadKysSA.mp4",
+        "url": "https://www.youtube.com/watch?v=fDQaadKysSA",
+        "captions": ACCEPT / "real-courses/hungyi-2025/fDQaadKysSA.zh-TW.vtt",
     },
 ]
 

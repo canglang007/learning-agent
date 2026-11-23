@@ -82,8 +82,7 @@ runs = {
 }
 base = {row["id"]: row["first_relevant_rank"] for row in runs["baseline"]["rows"]}
 print(f"{'id':24s} {'base':>5s} {'replace':>8s} {'fusion0.9':>10s}")
-for rid in base:
-    b = base[rid]
+for rid, b in base.items():
     rep = next(r["first_relevant_rank"] for r in runs["rerank_replace"]["rows"] if r["id"] == rid)
     fus = next(
         r["first_relevant_rank"] for r in runs["rerank_fusion_0.9"]["rows"] if r["id"] == rid
@@ -93,7 +92,7 @@ for rid in base:
         mark = "  ← fusion better"
     elif (fus or 99) > (rep or 99):
         mark = "  ← fusion worse"
-    print(f"{rid:24s} {str(b):>5s} {str(rep):>8s} {str(fus):>10s}{mark}")
+    print(f"{rid:24s} {b!s:>5s} {rep!s:>8s} {fus!s:>10s}{mark}")
 print()
 for name, result in runs.items():
     print(

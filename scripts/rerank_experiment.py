@@ -87,7 +87,7 @@ for b, r in zip(baseline["rows"], reranked["rows"]):
         mark = "  ← 改善"
     else:
         mark = "  ← 退步"
-    print(f"{r['id']:24s} {str(before):>5s} → {str(after):>4s}{mark}")
+    print(f"{r['id']:24s} {before!s:>5s} → {after!s:>4s}{mark}")
 Path("data/evaluations/multimodal-v1/rerank-product-path.json").write_text(
     json.dumps({"baseline": baseline, "reranked": reranked}, ensure_ascii=False, indent=1) + "\n",
     encoding="utf-8",

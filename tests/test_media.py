@@ -7,7 +7,7 @@ from test_learning import Scripted, call
 
 from learning_agent.app import create_app
 from learning_agent.config import Settings
-from learning_agent.media import MediaError, command, parse_captions
+from learning_agent.media import MediaError, command, parse_captions, probe
 from learning_agent.store import Store
 from learning_agent.tools import MaterialTools
 from learning_agent.worker import Worker
@@ -297,3 +297,75 @@ def test_local_asr_accepts_decoded_waveform_and_failure_preserves_captions(tmp_p
         worker.drain()
     assert client.get(base + "/media").json()["transcript_state"] == "failed"
     assert client.get(base + "/segments").json()[0]["text"] == "speech"
+
+
+def test_playback_plan_grades_container_and_codec():
+    """能不能直接播看"容器 + 编码"，不看扩展名猜。"""
+    from learning_agent import media
+
+    v_h264 = {"codec_name": "h264", "pix_fmt": "yuv420p"}
+    v_av1 = {"codec_name": "av1", "pix_fmt": "yuv420p"}
+    v_vp9 = {"codec_name": "vp9", "pix_fmt": "yuv420p"}
+    v_prores = {"codec_name": "prores", "pix_fmt": "yuv422p10le"}
+    a_aac = {"codec_name": "aac"}
+    a_opus = {"codec_name": "opus"}
+
+    assert media.playback_plan(".mp4", v_h264, a_aac) == "direct"
+    # AV1 装进 mp4：以前被"必须 h264"挡掉，白跑一次全量重编码。
+    assert media.playback_plan(".mp4", v_av1, a_aac) == "direct"
+    assert media.playback_plan(".webm", v_vp9, a_opus) == "direct"
+    # mkv 装 h264：只差一层壳，换容器即可，不该重编码。
+    assert media.playback_plan(".mkv", v_h264, a_aac) == "remux"
+    # 编码本身浏览器不认：这类才需要重编码。
+    assert media.playback_plan(".mp4", v_prores, a_aac) == "transcode"
+    assert media.playback_plan(".mp4", {"codec_name": "h264", "pix_fmt": "yuv444p"}, a_aac) == (
+        "transcode"
+    )
+
+
+def test_h264_in_mkv_is_remuxed_not_reencoded(tmp_path):
+    """mkv 装 h264 的文件要能直接进产品并播放，走 remux 而不是重编码。"""
+    source = tmp_path / "colors.mkv"
+    command(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=green:s=160x120:r=10:d=2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-f",
+            "matroska",
+            str(source),
+        ]
+    )
+    config = Settings(_env_file=None, data_root=tmp_path / "db", asr_provider="disabled")
+    close_for(tmp_path)
+    client = TestClient(create_app(config, Scripted([])))
+    space = client.post("/api/spaces", json={"content": "mkv"}).json()["id"]
+    upload = client.post(
+        f"/api/spaces/{space}/materials", files={"file": ("colors.mkv", source.read_bytes())}
+    )
+    assert upload.status_code == 202
+    material = upload.json()["id"]
+    base = f"/api/spaces/{space}/materials/{material}"
+    with Worker(config) as worker:
+        worker.drain()
+
+    store = Store(config.data_root)
+    info = store.media(space, material)
+    assert info["state"] == "ready"
+    assert info["playback"] == "remux"
+    assert info["browser_playable"] is False
+    preview = info["preview_path"]
+    assert preview.endswith(".mp4") and preview != info["original_path"]
+    # 转出来的预览本身必须是浏览器可直接播的，否则等于白转。
+    assert probe(config.data_root / preview)["browser_playable"] is True
+    assert client.get(base + "/playback", headers={"Range": "bytes=0-99"}).status_code == 206

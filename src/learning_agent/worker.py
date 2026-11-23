@@ -127,7 +127,7 @@ class Worker:
             pass
 
     def preview(self, job):
-        from learning_agent.media import prepare, probe
+        from learning_agent.media import prepare, probe, remux
 
         info = self.store.media(job["space_id"], job["material_id"])
         self.jobs.checkpoint(job, "preview")
@@ -158,7 +158,12 @@ class Worker:
         if not output.exists():
             temporary = directory / "preview.partial.mp4"
             try:
-                prepare(self.store.root / info["original_path"], temporary, info)
+                source = self.store.root / info["original_path"]
+                # 只差容器的文件走 remux（秒级、不损画质），编码不兼容才重编码。
+                if info.get("playback") == "remux":
+                    remux(source, temporary, info)
+                else:
+                    prepare(source, temporary, info)
                 self.validate_preview(
                     probe(temporary, max_seconds=max(14400, info["duration"] + 1)), info
                 )

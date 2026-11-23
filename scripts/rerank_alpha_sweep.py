@@ -24,9 +24,9 @@ store = Store(work)
 space = store.spaces()[0]["id"]
 queries = json.loads(Path("evals/retrieval-v4.json").read_text(encoding="utf-8"))["queries"]
 
-from scripts.retrieval_report import load_assets
-
 import math
+
+from scripts.retrieval_report import load_assets
 
 
 def _sigmoid(x):
@@ -134,8 +134,8 @@ rep_m, rep_rows = evaluate(None)
 results = {a: evaluate(a) for a in alphas}
 
 print(f"{'id':24s} {'base':>5s} {'repl':>5s} " + " ".join(f"a={a:g}".rjust(7) for a in alphas))
-for rid in base_rows:
-    line = f"{rid:24s} {str(base_rows[rid]):>5s} {str(rep_rows[rid]):>5s} "
+for rid, base_value in base_rows.items():
+    line = f"{rid:24s} {base_value!s:>5s} {rep_rows[rid]!s:>5s} "
     line += " ".join(str(results[a][1][rid]).rjust(7) for a in alphas)
     print(line)
 print()

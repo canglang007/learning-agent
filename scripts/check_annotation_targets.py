@@ -22,14 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-DEFAULT_ASSETS = {
-    "cs_pdf": "cs336-architecture.pdf",
-    "cs_video": "cs336-lecture.mp4",
-    "zh_video": "ntu-lecture.mp4",
-    "optimization": "optimization.pdf",
-    "worksheet": "worksheet.pdf",
-    "notes": "study-notes.md",
-}
+from eval_assets import DEFAULT_ASSETS
 
 
 def load(corpus):

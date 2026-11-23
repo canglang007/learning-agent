@@ -271,19 +271,21 @@ def test_failed_preview_never_serves_partial_output_and_can_retry(tmp_path, clip
     client = TestClient(create_app(settings, Scripted([])))
     item = client.post(f"/api/spaces/{space}/materials", files={"file": ("clip.mkv", clip)}).json()
     playback = f"/api/spaces/{space}/materials/{item['id']}/playback"
-    real_prepare = media.prepare
+    real_remux = media.remux
 
     def fail(source, target, info):
         target.write_bytes(b"incomplete MP4")
         assert client.get(playback).status_code == 409
         raise media.MediaError("模拟中断")
 
-    monkeypatch.setattr(media, "prepare", fail)
+    # 这个文件是 mkv 装 h264，走 remux 而不是重编码；要测的是"失败时不留半成品"，
+    # 所以拦它实际会走的那条路径。
+    monkeypatch.setattr(media, "remux", fail)
     with Worker(settings) as worker:
         worker.drain()
     assert jobs.get(item["job_id"])["state"] == "failed"
     assert client.get(playback).status_code == 409
-    monkeypatch.setattr(media, "prepare", real_prepare)
+    monkeypatch.setattr(media, "remux", real_remux)
     retried = client.post(f"/api/spaces/{space}/materials/{item['id']}/prepare").json()
     assert retried["id"] == item["job_id"]
     with Worker(settings) as worker:
