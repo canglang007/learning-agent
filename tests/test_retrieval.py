@@ -303,3 +303,28 @@ def test_defaults_ask_for_full_retrieval():
     assert fields["retrieval_mode"].default == "hybrid"
     assert fields["embedding_provider"].default == "local"
     assert fields["rerank_model"].default == "BAAI/bge-reranker-base"
+
+
+def test_rerank_scores_stay_ordered_and_non_negative(tmp_path):
+    """对外 score 必须与返回顺序一致，且不是负数。
+
+    精排的原始分是 logit（实测 -10 到 +7），直接当 score 会让"越靠前分越小"
+    看起来像 bug；只给 CE 概率又会出现"分数大的排在后面"（CE 略低但位次靠前）。
+    所以对外分数取融合分，既非负又与排序键同源。
+    """
+    store = Store(tmp_path)
+    space = store.space("course")["id"]
+    for name, text in [
+        ("a.md", "kv cache 省的是显存带宽"),
+        ("b.md", "天气与课程无关"),
+        ("c.md", "kv cache 让人省显存"),
+    ]:
+        store.add_material(space, name, text)
+    retriever = Retriever(
+        store, Settings(_env_file=None, embedding_provider="disabled", rerank_model="fake")
+    )
+    retriever.reranker = FakeReranker("kv cache")
+    hits = retriever.search(space, "kv cache")["hits"]
+    scores = [hit["score"] for hit in hits]
+    assert scores == sorted(scores, reverse=True)
+    assert all(0.0 <= score <= 1.0 for score in scores)

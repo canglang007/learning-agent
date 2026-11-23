@@ -120,6 +120,21 @@ def sigmoid(value):
     return 1 / (1 + math.exp(-value))
 
 
+def combined_scores(ce_scores, pool, weight):
+    """CE 概率与归一化 RRF 位次的分数空间融合，返回池内每个位置的分数。
+
+    对外展示的 ``score`` 必须用它与排序键一致——否则会出现"分数大的排在后面"：
+    只返回 CE 概率时，一个 CE 略低但位次更靠前的候选会排在前面。
+    ``weight=1.0`` 时退化为 CE 概率本身，``weight=0`` 时为纯 RRF 位次分。
+    """
+    rrf = {j: 1 / (60 + j + 1) for j in range(len(pool))}
+    rrf_max = max(rrf.values()) if rrf else 1
+    return {
+        j: weight * sigmoid(ce_scores[j]) + (1 - weight) * rrf[j] / rrf_max
+        for j in range(len(pool))
+    }
+
+
 def fuse_ce_with_rrf(ce_scores, pool, weight):
     """分数空间融合 CE 概率与 RRF 位次分数，返回池内新顺序（位置序列）。
 
@@ -129,12 +144,7 @@ def fuse_ce_with_rrf(ce_scores, pool, weight):
     权重 0.85–0.9 时 14 题可评分用例 hit@5 全中（纯替换 12/14）。
     ``weight=1.0`` 退化为纯 CE 替换，``weight=0`` 保留原 RRF 序。
     """
-    rrf = {j: 1 / (60 + j + 1) for j in range(len(pool))}
-    rrf_max = max(rrf.values()) if rrf else 1
-    combined = {
-        j: weight * sigmoid(ce_scores[j]) + (1 - weight) * rrf[j] / rrf_max
-        for j in range(len(pool))
-    }
+    combined = combined_scores(ce_scores, pool, weight)
     return sorted(range(len(pool)), key=lambda j: (-combined[j], j))
 
 
@@ -699,12 +709,18 @@ class Retriever:
         except RerankError as error:
             return ranking, {}, str(error)
         if self.settings.rerank_ce_weight >= 1.0:
+            # 纯 CE 替换：排序按原始分，展示值取 sigmoid（单调等价，值域 0-1）。
             order = sorted(range(len(pool)), key=lambda j: (-scores[j], pool[j]))
+            values = {j: sigmoid(scores[j]) for j in range(len(pool))}
         else:
-            order = fuse_ce_with_rrf(scores, pool, self.settings.rerank_ce_weight)
+            values = combined_scores(scores, pool, self.settings.rerank_ce_weight)
+            order = sorted(range(len(pool)), key=lambda j: (-values[j], pool[j]))
         return (
             [pool[j] for j in order] + list(ranking[self.settings.rerank_candidates :]),
-            {pool[j]: scores[j] for j in range(len(pool))},
+            # 返回的 score 与排序键必须是同一个数：原始 CE logit 是负数（实测 -10 到 +7），
+            # 而只返回 CE 概率时又会出现"分数大的排在后面"。融合分两者都避开，
+            # 且没有校准，不能当拒答阈值用。
+            {pool[j]: values[j] for j in range(len(pool))},
             "ready",
         )
 
