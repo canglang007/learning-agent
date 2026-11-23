@@ -20,6 +20,7 @@ store = Store(work)
 space = store.spaces()[0]["id"]
 queries = json.loads(Path("evals/retrieval-v5.json").read_text(encoding="utf-8"))["queries"]
 
+from scripts.eval_assets import default_rerank_model
 from scripts.retrieval_report import load_assets
 
 assets = load_assets(None, store, space)
@@ -80,7 +81,7 @@ def run(settings):
 
 baseline = run(make_settings(""))
 print(json.dumps({k: v for k, v in baseline.items() if k != "rows"}, ensure_ascii=False))
-reranked = run(make_settings("BAAI/bge-reranker-base"))
+reranked = run(make_settings(default_rerank_model()))
 print(json.dumps({k: v for k, v in reranked.items() if k != "rows"}, ensure_ascii=False))
 print("逐题（baseline → rerank）：")
 for b, r in zip(baseline["rows"], reranked["rows"]):

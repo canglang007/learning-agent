@@ -309,7 +309,7 @@ def test_defaults_ask_for_full_retrieval():
     assert fields["retrieval_mode"].default == "hybrid"
     assert fields["embedding_provider"].default == "ollama"
     assert fields["embedding_model"].default == "bge-m3"
-    assert fields["rerank_model"].default == "BAAI/bge-reranker-base"
+    assert fields["rerank_model"].default == "BAAI/bge-reranker-v2-m3-int8"
 
     # provider 与模型名的配对约束
     assert "/" not in fields["embedding_model"].default, "ollama 用的是模型标签，不是 HF 路径"

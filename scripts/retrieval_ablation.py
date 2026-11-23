@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from eval_assets import DEFAULT_ASSETS, settings_for
+from eval_assets import DEFAULT_ASSETS, default_rerank_model, settings_for
 
 # 复合查询的切分点：问句结尾、分句标点、并列与对照连词。
 # 「和 / 与 / 各自」这类连词在单主题问句里也会出现，所以切出来的子查询是
@@ -229,7 +229,7 @@ def main():
         flush=True,
     )
 
-    reranked = Retriever(store, make("BAAI/bge-reranker-base"), Embedder(make("")))
+    reranked = Retriever(store, make(default_rerank_model()), Embedder(make("")))
     reranked.prepare(space)
     ce_pool = {}
     started = time.time()
@@ -269,7 +269,7 @@ def main():
             args,
             retrieval_mode="bm25",
             embedding_provider="disabled",
-            rerank_model="BAAI/bge-reranker-base",
+            rerank_model=default_rerank_model(),
             rerank_candidates=args.rerank_candidates,
         ),
     )

@@ -91,16 +91,20 @@ class Settings(BaseSettings):
     """``local`` 模式的推理线程数；0 表示交给 onnxruntime 按核数决定。"""
     embedding_cache_dir: str = ""
     """``local`` 模式的模型缓存目录；留空则用 ``LA_DATA_ROOT/models``。"""
-    rerank_model: str = "BAAI/bge-reranker-base"
+    rerank_model: str = "BAAI/bge-reranker-v2-m3-int8"
     """交叉编码器重排模型（fastembed TextCrossEncoder）。
     留空关闭；默认开启，要关就显式设成空字符串（``LA_RERANK_MODEL=``）。
 
     实测（v5，7 讲 942 块、83 道可评分题，向量用 bge-m3）：
 
-    - 混合检索 Hit@5 **0.639** → 加精排 **0.771**，MRR 0.464 → 0.625；
-    - 分模态：pdf 0.714 → 0.81、video 0.623 → 0.754、text 0.00 → 1.00（仅 1 题）；
-    - 代价：权重约 1.1 GB（首次使用要下载），单次查询多约 0.9 秒
-      （默认 20 个候选逐对推理，CPU）。内存紧或网速差的机器把这两项关掉。
+    - 混合检索 Hit@5 **0.639** → 加精排 **0.807**，MRR 0.464 → 0.682；
+    - 分模态：pdf 0.714 → 0.857、video 0.623 → 0.787、text 0.00 → 1.00（仅 1 题）；
+    - 代价：权重 0.57 GB（int8 量化，首次使用要下载），单次查询约 3.3 秒
+      （默认 20 个候选逐对推理，CPU；无精排时 0.25 秒）。
+
+    上一版 ``BAAI/bge-reranker-base``（1.04 GB）是 0.771 / 0.625、单次 1.52 秒；
+    换这一档多花约 1.8 秒换来 +3.6 点，**换模型等于换口径**，数字必须带模型名。
+    内存紧或网速差的机器把这两项关掉。
 
     重排只作用于融合后的前 ``rerank_candidates`` 个候选，不改变召回集合。
     """

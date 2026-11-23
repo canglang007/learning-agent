@@ -26,6 +26,7 @@ queries = json.loads(Path("evals/retrieval-v5.json").read_text(encoding="utf-8")
 
 import math
 
+from scripts.eval_assets import default_rerank_model
 from scripts.retrieval_report import load_assets
 
 
@@ -41,7 +42,7 @@ settings = Settings(
     retrieval_mode="hybrid",
     # 向量走 config.py 默认（ollama + bge-m3），不在这里写死模型名。
     embedding_cache_dir=str(Path.home() / ".cache" / "la-models"),
-    rerank_model="BAAI/bge-reranker-base",
+    rerank_model=default_rerank_model(),
 )
 retriever = Retriever(store, settings, Embedder(settings))
 retriever.prepare(space)

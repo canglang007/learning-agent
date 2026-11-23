@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from eval_assets import DEFAULT_ASSETS, settings_for
+from eval_assets import DEFAULT_ASSETS, default_rerank_model, settings_for
 
 
 def main():
@@ -30,7 +30,7 @@ def main():
     parser.add_argument("--ids", nargs="+", required=True)
     parser.add_argument("--depth", type=int, default=120)
     parser.add_argument("--rerank-candidates", type=int, default=100)
-    parser.add_argument("--rerank-model", default="BAAI/bge-reranker-base")
+    parser.add_argument("--rerank-model", default=default_rerank_model())
     parser.add_argument("--model", default=None)
     parser.add_argument("--provider", default="local", choices=["local", "ollama", "compatible"])
     parser.add_argument("--base-url", default="http://127.0.0.1:11434")

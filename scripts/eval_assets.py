@@ -21,6 +21,18 @@ DEFAULT_ASSETS = {
 }
 
 
+def default_rerank_model():
+    """产品默认的精排模型，供实验脚本跟随而不写死字面量。
+
+    实验脚本原来各自写死 ``BAAI/bge-reranker-base``。产品默认换成更强的模型后，
+    这些脚本仍在测旧模型，而文档里两张表都叫"混合+精排"——口径不同却看不出来。
+    改用这里的值以后，脚本永远跟着产品默认走；要复现历史数字就显式传参。
+    """
+    from learning_agent.config import Settings
+
+    return Settings(_env_file=None).rerank_model
+
+
 def settings_for(work, args, **overrides):
     """评测脚本统一的 Settings 构造。
 

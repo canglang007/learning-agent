@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from eval_assets import DEFAULT_ASSETS, settings_for
+from eval_assets import DEFAULT_ASSETS, default_rerank_model, settings_for
 
 
 def fused_within(retriever, own, question, vector, vectors, cap=30):
@@ -80,7 +80,7 @@ def main():
     parser.add_argument("--provider", default="ollama", choices=["local", "ollama", "compatible"])
     parser.add_argument("--base-url", default="http://127.0.0.1:11434")
     parser.add_argument("--model-cache", default=str(Path.home() / ".cache" / "la-models"))
-    parser.add_argument("--rerank-model", default="BAAI/bge-reranker-base")
+    parser.add_argument("--rerank-model", default=default_rerank_model())
     parser.add_argument("--ce-weight", type=float, default=0.9)
     parser.add_argument(
         "--ce-weights",
