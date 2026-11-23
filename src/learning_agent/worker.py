@@ -11,6 +11,7 @@ import time
 from learning_agent.config import Settings
 from learning_agent.jobs import Jobs, JobStopped, configuration
 from learning_agent.media import MediaError, _worker_lock_fd
+from learning_agent.ocr import OcrError
 from learning_agent.retrieval import EmbeddingError, Retriever
 from learning_agent.store import Store
 
@@ -105,12 +106,15 @@ class Worker:
                 self.jobs.action(job["id"], "pause")
                 self.jobs.stop(job, "处理配置已变化，请恢复原配置或提交新任务")
                 return True
-            {"preview": self.preview, "transcribe": self.transcribe, "index": self.index}[
-                job["kind"]
-            ](job)
+            {
+                "preview": self.preview,
+                "transcribe": self.transcribe,
+                "index": self.index,
+                "ocr": self.ocr,
+            }[job["kind"]](job)
         except JobStopped:
             self.jobs.stop(job)
-        except (MediaError, EmbeddingError) as error:
+        except (MediaError, EmbeddingError, OcrError) as error:
             self.jobs.stop(job, str(error))
         except Exception:  # noqa: BLE001 -- redact errors at the process/provider boundary
             # Never persist raw upstream errors, request headers or keys.
@@ -241,6 +245,31 @@ class Worker:
             job=job,
             allow_empty=True,
         )
+
+    def ocr(self, job):
+        """Recognise pages that carry no text layer, one committed page at a time.
+
+        Per-page results are written without touching the material revision, so a
+        pause or crash resumes on the remaining pages. The single revision bump in
+        ``finalize_ocr`` is what makes the retrieval index rebuild afterwards.
+        """
+        from learning_agent.ocr import recognize
+        from learning_agent.pdf import render_page
+
+        space, material = job["space_id"], job["material_id"]
+        pending = self.store.ocr_pending_pages(space, material)
+        total = len(pending)
+        if total:
+            path = self.store.root / "materials" / (material + ".pdf")
+            for done, page in enumerate(pending):
+                self.jobs.checkpoint(job, f"page-{page}", done, total)
+                png, _, _ = render_page(path, page)
+                self.store.save_ocr_page(space, material, page, recognize(png)["text"])
+            self.jobs.checkpoint(job, "publish_text", total, total)
+        self.store.finalize_ocr(space, material)
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.jobs.finish(job, db)
 
     def index(self, job):
         def observe(stage, completed, total, batch, db=None):

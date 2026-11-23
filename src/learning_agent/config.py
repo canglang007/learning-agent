@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     summary_timeout_seconds: float = Field(default=30, gt=0, le=90)
     summary_min_new_turns: int = Field(default=4, ge=2, le=12)
     summary_keep_recent_turns: int = Field(default=3, ge=1, le=8)
-    asr_provider: Literal["disabled", "local", "compatible"] = "disabled"
+    asr_provider: Literal["disabled", "local", "compatible"] = "local"
+    """默认本地转写：上传视频后不配置任何外部服务即可生成字幕。
+    本地引擎依赖可选包（``uv sync --extra asr``）；未安装时转写接口返回明确的
+    安装提示而不是让后台任务静默失败。需要关闭时显式设为 ``disabled``。"""
     asr_model: str = "base"
     asr_base_url: str = "https://api.openai.com/v1"
     asr_api_key: SecretStr = SecretStr("")
@@ -50,6 +53,11 @@ class Settings(BaseSettings):
     asr_local_part_seconds: int = Field(default=300, ge=10, le=600)
     asr_api_part_seconds: int = Field(default=60, ge=10, le=120)
     asr_context_seconds: int = Field(default=5, ge=0, le=10)
+    ocr_enabled: bool = True
+    """对没有文字层的 PDF 页做 OCR（扫描件）。只处理文字为空的页；引擎依赖可选包
+    ``uv sync --extra ocr``，未安装时扫描页保持不可检索并在页面信息里标明。"""
+    ocr_min_text_characters: int = Field(default=20, ge=0, le=500)
+    """文字层字符数低于该值的页视为无可提取文字，进入 OCR。"""
     retrieval_mode: Literal["lexical_baseline", "bm25", "hybrid"] = "hybrid"
     embedding_provider: Literal["disabled", "ollama", "compatible", "local"] = "disabled"
     embedding_base_url: str = "http://localhost:11434"

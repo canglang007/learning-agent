@@ -47,6 +47,7 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
                 CREATE TABLE IF NOT EXISTS material_pages (
                     material_id TEXT NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL,
                     width REAL NOT NULL, height REAL NOT NULL,
+                    text_source TEXT NOT NULL DEFAULT 'text',
                     PRIMARY KEY(material_id, page));
                 CREATE TABLE IF NOT EXISTS media (
                     material_id TEXT PRIMARY KEY, metadata TEXT NOT NULL,
@@ -111,6 +112,11 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
             conversation_columns = {row[1] for row in db.execute("PRAGMA table_info(conversations)")}
             if "owner" not in conversation_columns:
                 db.execute("ALTER TABLE conversations ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            page_columns = {row[1] for row in db.execute("PRAGMA table_info(material_pages)")}
+            if "text_source" not in page_columns:
+                db.execute(
+                    "ALTER TABLE material_pages ADD COLUMN text_source TEXT NOT NULL DEFAULT 'text'"
+                )
         self.init_memory()
         self.init_accounts()
         self.init_runtime()
@@ -156,11 +162,17 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
             )
         return {key: value for key, value in item.items() if key != "text"}
 
-    def add_pdf(self, space_id, name, raw):
+    def add_pdf(self, space_id, name, raw, min_text_characters=20):
         from learning_agent.pdf import extract_pages
 
         self.require_space(space_id)
         pages = extract_pages(raw)
+        # A page without a usable text layer is a scan or a pure-image page. Record
+        # that instead of storing an empty string that later looks like real content.
+        for page in pages:
+            page["text_source"] = (
+                "text" if len(page["text"].strip()) >= min_text_characters else "none"
+            )
         material_id = str(uuid4())
         text = "\n\n".join(f"[PDF 第{p['page']}页]\n{p['text']}" for p in pages)
         (self.root / "materials" / (material_id + ".pdf")).write_bytes(raw)
@@ -170,8 +182,11 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
                 (material_id, space_id, name, text),
             )
             db.executemany(
-                "INSERT INTO material_pages VALUES (?,?,?,?,?)",
-                [(material_id, p["page"], p["text"], p["width"], p["height"]) for p in pages],
+                "INSERT INTO material_pages VALUES (?,?,?,?,?,?)",
+                [
+                    (material_id, p["page"], p["text"], p["width"], p["height"], p["text_source"])
+                    for p in pages
+                ],
             )
         return {
             "id": material_id,
@@ -179,6 +194,7 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
             "name": name,
             "format": "pdf",
             "page_count": len(pages),
+            "ocr_pending": sum(1 for p in pages if p["text_source"] == "none"),
         }
 
     def pages(self, space_id, material_id):
@@ -187,10 +203,55 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
             return [
                 dict(row)
                 for row in db.execute(
-                    "SELECT page,length(text) AS text_characters FROM material_pages WHERE material_id=? ORDER BY page",
+                    "SELECT page,length(text) AS text_characters,text_source FROM material_pages WHERE material_id=? ORDER BY page",
                     (material_id,),
                 )
             ]
+
+    def ocr_pending_pages(self, space_id, material_id):
+        """Pages that still have no text, in physical order."""
+        self.material(space_id, material_id)
+        with self.connect() as db:
+            return [
+                row[0]
+                for row in db.execute(
+                    "SELECT page FROM material_pages WHERE material_id=? AND text_source='none' ORDER BY page",
+                    (material_id,),
+                )
+            ]
+
+    def save_ocr_page(self, space_id, material_id, page, text):
+        """Store OCR output for one page without touching the material revision.
+
+        The revision bump happens once in :meth:`finalize_ocr` so that an
+        interrupted run resumes on the remaining pages instead of rebuilding
+        the index after every single page.
+        """
+        self.material(space_id, material_id)
+        with self.connect() as db:
+            cursor = db.execute(
+                "UPDATE material_pages SET text=?,text_source='ocr' WHERE material_id=? AND page=?",
+                (text, material_id, page),
+            )
+            if not cursor.rowcount:
+                raise LookupError("该资料没有此 PDF 页面")
+
+    def finalize_ocr(self, space_id, material_id):
+        """Rebuild the joined text and bump the revision so chunks are regenerated."""
+        self.material(space_id, material_id)
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT page,text,text_source FROM material_pages WHERE material_id=? ORDER BY page",
+                (material_id,),
+            ).fetchall()
+            if not any(row[2] == "ocr" for row in rows):
+                return False
+            text = "\n\n".join(f"[PDF 第{row[0]}页]\n{row[1]}" for row in rows)
+            db.execute(
+                "UPDATE materials SET text=?, revision=revision+1 WHERE id=?",
+                (text, material_id),
+            )
+            return True
 
     def page(self, space_id, material_id, page):
         material = self.material(space_id, material_id)

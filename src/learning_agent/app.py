@@ -14,9 +14,10 @@ from learning_agent.config import Settings
 from learning_agent.context import profile_id
 from learning_agent.jobs import JobConflict, Jobs
 from learning_agent.learning import Feedback, FeedbackError, LearningConflict, UserStateEdit
-from learning_agent.media import MEDIA_SUFFIXES, MediaError, parse_captions
+from learning_agent.media import MEDIA_SUFFIXES, MediaError, asr_available, parse_captions
 from learning_agent.memory import ContextSettings, MemoryCreate, MemoryEdit, TopicCreate
 from learning_agent.model_registry import status as model_status
+from learning_agent.ocr import available as ocr_available
 from learning_agent.pdf import PdfError
 from learning_agent.provider import OpenAIProvider
 from learning_agent.references import resolve_references
@@ -169,6 +170,15 @@ def create_app(settings=None, provider=None):
             "vision": settings.enable_vision,
             "video": True,
             "asr_provider": settings.asr_provider,
+            "asr_ready": (
+                (settings.asr_provider == "local" and asr_available())
+                or (
+                    settings.asr_provider == "compatible"
+                    and bool(settings.asr_api_key.get_secret_value())
+                )
+            ),
+            "ocr_enabled": settings.ocr_enabled,
+            "ocr_ready": settings.ocr_enabled and ocr_available(),
             "retrieval": settings.retrieval_mode,
             "embedding_provider": settings.embedding_provider,
             "capabilities": model_status(settings),
@@ -253,11 +263,22 @@ def create_app(settings=None, provider=None):
             raise HTTPException(413, "PDF限制20 MB，文字资料限制2 MB")
         if suffix == ".pdf":
             try:
-                return await asyncio.to_thread(
-                    store.add_pdf, space_id, (file.filename or "material.pdf")[:200], raw
+                item = await asyncio.to_thread(
+                    store.add_pdf,
+                    space_id,
+                    (file.filename or "material.pdf")[:200],
+                    raw,
+                    settings.ocr_min_text_characters,
                 )
             except PdfError as error:
                 raise HTTPException(422, str(error)) from None
+            if settings.ocr_enabled and item["ocr_pending"] and ocr_available():
+                # Queued, never run inline: a scanned book is hundreds of pages.
+                try:
+                    item["ocr_job"] = jobs.enqueue("ocr", space_id, settings, item["id"])
+                except JobConflict:
+                    pass
+            return item
         try:
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
@@ -326,10 +347,27 @@ def create_app(settings=None, provider=None):
         )
         return {"segment_count": len(segments), "transcript_state": "ready"}
 
+    @app.post("/api/spaces/{space_id}/materials/{material_id}/ocr", status_code=202)
+    async def recognize_pages(space_id: str, material_id: str):
+        if store.material(space_id, material_id)["format"] != "pdf":
+            raise HTTPException(422, "页面文字识别只适用于 PDF")
+        if not settings.ocr_enabled:
+            raise HTTPException(503, "OCR 已关闭；设置 LA_OCR_ENABLED=1 后重试")
+        if not ocr_available():
+            raise HTTPException(503, "未安装 OCR 依赖，请运行 uv sync --extra ocr")
+        return jobs.enqueue("ocr", space_id, settings, material_id)
+
     @app.post("/api/spaces/{space_id}/materials/{material_id}/transcribe", status_code=202)
     async def transcribe(space_id: str, material_id: str):
         if settings.asr_provider == "disabled":
             raise HTTPException(503, "请配置语音识别，或先上传SRT/VTT字幕")
+        # Content problems (no audio track) are reported before install problems.
+        if not store.media(space_id, material_id)["has_audio"]:
+            raise HTTPException(422, "该视频没有音轨，可查看画面或上传已有字幕")
+        if settings.asr_provider == "local" and not asr_available():
+            raise HTTPException(
+                503, "未安装本地转写依赖，请运行 uv sync --extra asr；也可先上传SRT/VTT字幕"
+            )
         return jobs.enqueue("transcribe", space_id, settings, material_id)
 
     @app.get("/api/spaces/{space_id}/materials/{material_id}/pages")

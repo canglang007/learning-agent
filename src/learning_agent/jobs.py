@@ -16,6 +16,11 @@ class JobStopped(Exception):
 def configuration(kind, settings):
     if kind == "preview":
         return {"pipeline": "preview-v1"}
+    if kind == "ocr":
+        return {
+            "pipeline": "page-ocr-v1",
+            "min_text_characters": settings.ocr_min_text_characters,
+        }
     if kind == "transcribe":
         return {
             "pipeline": "parts-transcript-v2",
@@ -81,6 +86,14 @@ class Jobs:
                 ],
                 separators=(",", ":"),
             )
+        if kind == "ocr":
+            # The input of OCR is the set of pages, not the extracted text: the
+            # text changes *because of* this job, so keying on it would abort
+            # the job on its own first write.
+            row = db.execute(
+                "SELECT count(*) FROM material_pages WHERE material_id=?", (material,)
+            ).fetchone()
+            return f"pages:{row[0]}"
         row = db.execute(
             "SELECT metadata,transcript_revision FROM media WHERE material_id=?", (material,)
         ).fetchone()
@@ -93,11 +106,15 @@ class Jobs:
     def enqueue(self, kind, space, settings, material=None):
         self.store.require_space(space)
         if material:
-            info = self.store.media(space, material)
-            if kind == "transcribe" and not info["has_audio"]:
-                from learning_agent.media import MediaError
+            if kind == "ocr":
+                if self.store.material(space, material)["format"] != "pdf":
+                    raise JobConflict("页面文字识别只适用于 PDF")
+            else:
+                info = self.store.media(space, material)
+                if kind == "transcribe" and not info["has_audio"]:
+                    from learning_agent.media import MediaError
 
-                raise MediaError("该视频没有音轨，可查看画面或上传已有字幕")
+                    raise MediaError("该视频没有音轨，可查看画面或上传已有字幕")
         config = json.dumps(configuration(kind, settings), sort_keys=True)
         target = material or space
         with self.store.connect() as db:
@@ -311,6 +328,10 @@ class Jobs:
     def project(db, identifier):
         row = db.execute("SELECT * FROM jobs WHERE id=?", (identifier,)).fetchone()
         if not row["material_id"]:
+            return
+        if row["kind"] == "ocr":
+            # Per-page text lives in material_pages and progress lives in the job
+            # row; there is no media record to project onto.
             return
         if row["kind"] == "preview":
             # A queued retry must not hide an already published usable preview.

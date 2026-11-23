@@ -86,7 +86,7 @@ DESCRIPTIONS = {
     "material_outline": "分页查看指定资料的导航。PDF按物理页首行、音视频按5分钟时间分组、文字按段落；不是语义章节识别。start为从0开始的目录偏移，limit最多30；next_start可继续翻页。",
     "read_context": "按搜索/目录返回的chunk_id读取原段及前后最多各2段。用于补充定义、条件、推导上下文，再决定是否读整页、查看图像或检查视频。字幕更新后旧chunk_id会失效，应重新搜索。",
     "read_passage": "读取资料原文与行号。范围最多50行；获取推导条件、定义或前后文。",
-    "read_page": "读取PDF指定物理页的提取文字与行号。图表关系/公式排版不能仅凭文字判断，应inspect_page查看。扫描页可能没有提取文字。",
+    "read_page": "读取PDF指定物理页的文字与行号。text_source标明来源：text为文件自带文字层，ocr为扫描页识别结果（可能有错字或顺序错误），none表示该页无文字需改用inspect_page。图表关系/公式排版不能仅凭文字判断。",
     "inspect_page": "实际查看PDF页面图像以理解图表、公式和排版。page是从1开始的物理页。region=null查看整页，或用左上角原点的归一化[left,top,right,bottom]裁切区域，值在0到1之间。",
     "inspect_media": "读取音视频指定时间段（最多120秒）。transcript读取有时间戳字幕；joint同时抽样最多3帧，受本轮共享图像预算限制。返回字幕来源、实际帧时间和回放链接。不是逐帧观看或直接听音频，缺字幕时不能编造讲话内容。",
     "deliver_explanation": "最终交付讲解与简短学习工作记录，一次完成、无需后续模型调用。answer为给用户的Markdown正文，其他字段记录主题、卡点及实际讲法，不代表掌握。必须独立于其他工具调用，先看完所需观察再交付。",
@@ -237,13 +237,26 @@ class MaterialTools:
                 if name == "read_page":
                     lines = page["text"].splitlines()
                     text = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines))
-                    return {
+                    source = page.get("text_source") or "text"
+                    observed = {
                         **result,
                         "text": text[:12000],
                         "total_lines": len(lines),
                         "truncated": len(text) > 12000,
                         "has_text": bool(text.strip()),
+                        "text_source": source,
                     }
+                    if source == "ocr":
+                        observed["detail"] = (
+                            "该页无可提取文字层，内容来自 OCR 识别，可能存在错字、公式符号错误"
+                            "或阅读顺序错误；涉及图表与公式的结论应结合 inspect_page 的图像确认。"
+                        )
+                    elif source == "none":
+                        observed["detail"] = (
+                            "该页没有可提取文字（扫描页或纯图页），请使用 inspect_page 查看图像，"
+                            "不要根据空白文字推测内容。"
+                        )
+                    return observed
                 if not self.vision:
                     return {
                         "error": "vision_disabled",

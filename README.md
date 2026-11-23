@@ -8,7 +8,7 @@ Learning Agent 面向在长课程、讲义和个人资料里自学的场景。�
 
 ## 核心能力
 
-- **多模态资料**：文字、PDF、音频、视频；PDF 支持物理页码和区域查看，视频支持字幕与抽样画面。
+- **多模态资料**：文字、PDF、音频、视频；PDF 支持物理页码和区域查看，扫描页可识别文字层，视频支持字幕与抽样画面。
 - **Agent 自主工具调用**：模型根据问题和工具观察选择解释、澄清、搜索、补读、看页或看帧，而不是固定检索后生成。
 - **可选自动路由**：简单问题走直答或固定检索，涉及页面、图表、视频、反馈或选中位置时回到完整 Agent，保留同一套 Runtime 与记录。
 - **连续学习**：保存当前目标、卡点、讲解尝试和用户反馈；支持主题接续与可管理的跨会话记忆。
@@ -45,6 +45,16 @@ cd learning-agent
 uv sync --extra dev
 cp .env.example .env
 ```
+
+可选能力按需加装，不装不影响文字和数字版 PDF 的问答：
+
+| 附加项 | 命令 | 用途 |
+| --- | --- | --- |
+| `asr` | `uv sync --extra dev --extra asr` | 本地语音转写（默认 provider 为 `local`） |
+| `ocr` | `uv sync --extra dev --extra ocr` | 识别 PDF 扫描页的文字 |
+| `embed` | `uv sync --extra dev --extra embed` | 进程内多语言向量检索 |
+
+缺少附加项时对应入口返回安装提示，不会让后台任务静默失败。
 
 编辑 `.env`，至少填写：
 
@@ -165,7 +175,7 @@ uv run python scripts/accounts.py invite --note 试用 --uses 10
 2. 新建会话，直接提问；需要时先在阅读器中选中 PDF 页码或视频时间段。
 3. 展开回答下的工具记录，查看 Agent 实际读过哪一页、哪段字幕或哪几帧，并点击来源回到原位置。
 4. 用“这一步没懂 / 换个例子 / 我来复述 / 这一点明白了”反馈，或继续自由追问。
-5. 音视频可上传 SRT/VTT 字幕；没有字幕时，可配置本地或兼容 ASR 后启动转写。
+5. 音视频默认用本地 ASR 转写；也可直接上传 SRT/VTT 字幕，或改用兼容 API。
 6. 需要比较改动效果时，打开 `/evaluation` 或使用评测 CLI。
 
 ### 支持的资料
@@ -173,7 +183,7 @@ uv run python scripts/accounts.py invite --note 试用 --uses 10
 | 类型 | 当前支持 | 说明 |
 | --- | --- | --- |
 | 文字 | 上传、分段、行号阅读 | 适合笔记、讲义转写文本 |
-| PDF | 20 MB / 200 页；物理页码、页内文字、整页/区域图像 | 扫描页没有文字时仍可查看图像 |
+| PDF | 20 MB / 200 页；物理页码、页内文字、整页/区域图像 | 无文字层的扫描页自动识别文字（需 `uv sync --extra ocr`），公式与版面仍靠看图 |
 | 音视频 | 默认 2 GiB / 4 小时 / 最高 4K；字幕、抽样帧、回放 | 不是连续逐帧观看，也不直接理解音频 |
 | 字幕 | SRT / VTT；本地或兼容 API ASR | 已有字幕优先；ASR 可能误识别术语 |
 | 检索 | BM25；进程内多语言向量 + RRF（也可接 ollama / 兼容 API） | 未配置向量或索引故障时明确退回词法 |
@@ -193,7 +203,8 @@ uv run python scripts/accounts.py invite --note 试用 --uses 10
 | `LA_ROUTE_POLICY` | `agent` | `agent` 始终走完整 Agent；`auto` 启用自动直答/固定检索 |
 | `LA_DATA_ROOT` | `./data` | 资料、数据库和产物目录 |
 | `LA_STREAM_ANSWER` | `false` | 是否显示正文草稿流（进度 SSE 不受影响） |
-| `LA_ASR_PROVIDER` | `disabled` | `local` / `compatible` / `disabled` |
+| `LA_ASR_PROVIDER` | `local` | `local` / `compatible` / `disabled`；`local` 需装 `asr` 附加项 |
+| `LA_OCR_ENABLED` | `true` | 是否识别 PDF 扫描页；需装 `ocr` 附加项 |
 | `LA_EMBEDDING_PROVIDER` | `disabled` | `ollama` / `compatible` / `disabled` |
 | `LA_MEDIA_MAX_BYTES` | 2 GiB | 单份媒体大小上限 |
 | `LA_MEDIA_MAX_SECONDS` | 4 小时 | 单份媒体时长上限 |
@@ -293,7 +304,7 @@ notes/              自用设计与复盘笔记（不提交）
 
 ## 当前状态
 
-- 工程回归：258 项通过、5 项按条件跳过；CI 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
+- 工程回归：266 项通过、5 项按条件跳过；CI 运行公开检查、pytest、ruff、评测完整性检查和 Docker build。
 - 本地 Docker build/run 与 Compose 配置已验证；GitHub Actions 绿色。
 - 已有自包含演示数据、自动路由、只读 MCP、基线结果表和 3–5 分钟演示脚本。
 - 小型实例实测：1 核 1 GiB 上三路并发提问全部完成，进程常驻约 210 MB；耗时受模型服务影响明显（27–77 秒）。
@@ -308,7 +319,8 @@ notes/              自用设计与复盘笔记（不提交）
 - 账号只做"谁能进、这是谁"：没有邮箱验证、找回密码、角色权限和多租户计费；忘记密码找部署者用 `scripts/accounts.py passwd` 重置。资料空间仍是共用的，会话、学习主题与记忆按账号隔离。
 - 音视频理解是“字幕 + 抽样帧”，不是连续逐帧观看、直接听音频或说话人分离。
 - ASR 可能断句、漏词或误识别专业术语；已有字幕优先，重要内容需要对照原文或画面。
+- 扫描页 OCR 只补“这页有没有可检索的文字”：标题和正文可用，公式、表格结构和版面关系仍会错，需要看图核对；不支持手写体和独立图片文件。
 - 模型能力、协议和流式支持因服务商而异；Responses 与部分网关的组合仍以实际验证为准。
 - 评测覆盖工程路径和开发过程复核，不宣称真人学习收益或教学通过率。
 
-更新于：2026-11-17 21:45:00（Asia/Shanghai，UTC+08:00）
+更新于：2026-11-23 19:10:00（Asia/Shanghai，UTC+08:00）

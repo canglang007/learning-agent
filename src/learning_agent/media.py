@@ -26,6 +26,15 @@ class MediaError(ValueError):
     pass
 
 
+def asr_available():
+    """True when the optional local transcription engine can be imported."""
+    try:
+        import faster_whisper  # noqa: F401
+    except Exception:  # noqa: BLE001 -- optional dependency boundary
+        return False
+    return True
+
+
 def command(args, timeout=180):
     if not shutil.which(args[0]):
         raise MediaError("需要在本机安装 ffmpeg（包含 ffprobe）后处理音视频")

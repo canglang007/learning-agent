@@ -60,7 +60,8 @@ def prepared(tmp_path, clip, model=None, **kwargs):
 
 
 def test_time_captions_frames_playback_range_and_scope(tmp_path, clip):
-    client, space, material, base, config, _ = prepared(tmp_path, clip)
+    # Explicitly unconfigured transcription: this test is about captions, not ASR.
+    client, space, material, base, config, _ = prepared(tmp_path, clip, asr_provider="disabled")
     captions = b"WEBVTT\n\n00:00.000 --> 00:01.900\nred definition\n\n00:02.000 --> 00:04.000\nblue example\n"
     assert (
         client.post(base + "/captions", files={"file": ("colors.vtt", captions)}).status_code == 200
@@ -112,7 +113,9 @@ def test_time_captions_frames_playback_range_and_scope(tmp_path, clip):
 
 
 def test_media_agent_shared_budget_missing_captions_and_focus(tmp_path, clip):
-    client, space, material, base, config, model = prepared(tmp_path, clip, max_images_per_turn=2)
+    client, space, material, base, config, model = prepared(
+        tmp_path, clip, max_images_per_turn=2, asr_provider="disabled"
+    )
     conv = client.post(f"/api/spaces/{space}/conversations").json()["id"]
     args = {"material_id": material, "start_seconds": 0.0, "end_seconds": 4.0, "mode": "joint"}
     model.responses = [

@@ -157,6 +157,15 @@ class McpWorkspace:
         sid = self.space_id(space_id)
         result = self.store.page(sid, material_id, page)
         text = result.get("text", "")
+        source = result.get("text_source") or "text"
+        detail = "只返回 PDF 页内文字；图表、公式排版和扫描页图像需要在网页查看。"
+        if source == "ocr":
+            detail = (
+                "该页文字来自 OCR（扫描页），可能有错字、公式符号错误或顺序错误；"
+                "图表与公式排版需要在网页看图像。"
+            )
+        elif source == "none":
+            detail = "该页没有可提取文字（扫描页或纯图页），文字通道拿不到内容，需要在网页查看图像。"
         return {
             "space_id": sid,
             "material_id": material_id,
@@ -166,8 +175,9 @@ class McpWorkspace:
             "total_lines": len(text.splitlines()),
             "truncated": len(text) > 12000,
             "has_text": bool(text.strip()),
+            "text_source": source,
             "page_url": f"/api/spaces/{sid}/materials/{material_id}/pages/{page}/image",
-            "detail": "只返回 PDF 页内提取文字；图表、公式排版和扫描页图像需要在网页查看。",
+            "detail": detail,
         }
 
     def _chunks(self, space_id: str, material_id: str | None = None) -> list[dict[str, Any]]:
