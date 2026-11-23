@@ -263,3 +263,31 @@ def test_fuse_ce_with_rrf_saturation_tiebreak_and_replace_mode():
     assert fuse_ce_with_rrf([8.0, 10.0], [0, 1], weight=1.0) == [1, 0]
     # weight=0 保留 RRF 原序（此时不应配置重排，仅为边界完备性）。
     assert fuse_ce_with_rrf([3.0, 0.0], [0, 1], weight=0.0) == [0, 1]
+
+
+def test_bm25_statistics_are_built_once_per_corpus_version(tmp_path):
+    """BM25 统计只与语料有关：同一份语料连续查询不该重复分词，语料变了才重建。"""
+    from learning_agent.retrieval import Bm25Index
+
+    store = Store(tmp_path)
+    space = store.space("course")["id"]
+    store.add_material(space, "a.md", "normalization keeps the residual path clear")
+    store.add_material(space, "b.md", "temperature and weather are unrelated")
+    retriever = Retriever(store, Settings(_env_file=None, embedding_provider="disabled"))
+
+    first = retriever.search(space, "normalization")
+    cached = list(retriever.lexical_index.values())
+    second = retriever.search(space, "residual")
+    assert len(cached) == 1 and next(iter(retriever.lexical_index.values())) is cached[0]
+    assert second["retrieval"] == "bm25"
+    assert [h["chunk_id"] for h in first["hits"]] != []
+
+    # 同一份文本用一次性函数与索引类算出来的分数必须逐项相同：
+    # 缓存不能顺手改掉评分口径。
+    texts = [c["excerpt"] for c in retriever.index.chunks(space)]
+    assert bm25("normalization", texts) == Bm25Index(texts).scores("normalization")
+
+    # 新增材料后块集合变化，签名不再匹配，统计重建。
+    store.add_material(space, "c.md", "normalization appears here too")
+    retriever.search(space, "normalization")
+    assert len(retriever.lexical_index) == 2

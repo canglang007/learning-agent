@@ -34,25 +34,49 @@ def tokenize(text):
     return tokens
 
 
+class Bm25Index:
+    """语料统计与查询打分分开：统计一次建好，之后每次查询只算分数。
+
+    原先每次 ``bm25(query, texts)`` 都把全部块重新分词。单讲几十块时无所谓，
+    整讲语料扩到 900 多块、又叠上子查询与精排对照之后，一次提问会白烧一两秒
+    的纯重复计算。统计只与语料有关，和查询无关，所以由调用方按语料版本缓存。
+
+    参数与原先一致（k1=1.2、b=0.75），分数口径没有变。
+    """
+
+    def __init__(self, texts, k1=1.2, b=0.75):
+        self.documents = [Counter(tokenize(text)) for text in texts]
+        self.lengths = [sum(document.values()) for document in self.documents]
+        self.total = len(self.documents)
+        self.average = sum(self.lengths) / max(1, self.total) or 1
+        self.frequencies = Counter(word for document in self.documents for word in document)
+        self.k1 = k1
+        self.b = b
+
+    def scores(self, query):
+        scores = []
+        for document, length in zip(self.documents, self.lengths):
+            score = 0.0
+            for word in set(tokenize(query)):
+                frequency = document[word]
+                if frequency:
+                    idf = math.log(
+                        1
+                        + (self.total - self.frequencies[word] + 0.5)
+                        / (self.frequencies[word] + 0.5)
+                    )
+                    score += (
+                        idf
+                        * frequency
+                        * (self.k1 + 1)
+                        / (frequency + self.k1 * (1 - self.b + self.b * length / self.average))
+                    )
+            scores.append(score)
+        return scores
+
+
 def bm25(query, texts):
-    documents = [Counter(tokenize(text)) for text in texts]
-    lengths = [sum(doc.values()) for doc in documents]
-    average = sum(lengths) / max(1, len(lengths)) or 1
-    frequencies = Counter(word for doc in documents for word in doc)
-    scores = []
-    for doc, length in zip(documents, lengths):
-        score = 0
-        for word in set(tokenize(query)):
-            frequency = doc[word]
-            if frequency:
-                idf = math.log(
-                    1 + (len(documents) - frequencies[word] + 0.5) / (frequencies[word] + 0.5)
-                )
-                score += (
-                    idf * frequency * 2.2 / (frequency + 1.2 * (0.25 + 0.75 * length / average))
-                )
-        scores.append(score)
-    return scores
+    return Bm25Index(texts).scores(query)
 
 
 def fuse(*rankings, k=60):
@@ -555,8 +579,24 @@ class Retriever:
         self.embedder = embedder or Embedder(self.settings)
         self.reranker = Reranker(self.settings) if self.settings.rerank_model else None
         self.lock = threading.Lock()
+        self.lexical_lock = threading.Lock()
+        self.lexical_index = {}
         self.jobs = {}
         self.queue = Jobs(store)
+
+    def lexical_scores(self, chunks, query):
+        """同一份语料只建一次 BM25 统计；块集合变了（上传、重新分块）才重建。"""
+        signature = tuple(chunk["chunk_id"] for chunk in chunks)
+        with self.lexical_lock:
+            index = self.lexical_index.get(signature)
+        if index is None:
+            index = Bm25Index([chunk["excerpt"] for chunk in chunks])
+            with self.lexical_lock:
+                # 语料版本切换不会很频繁，保留最近几份足够；再多只是白占内存。
+                while len(self.lexical_index) >= 4:
+                    self.lexical_index.pop(next(iter(self.lexical_index)))
+                self.lexical_index[signature] = index
+        return index.scores(query)
 
     def vectors(self, chunks):
         ids = {c["chunk_id"] for c in chunks}
@@ -668,12 +708,13 @@ class Retriever:
             "ready",
         )
 
-    def search(self, space, query, material_id=None):
+    def search(self, space, query, material_id=None, depth=5):
+        """``depth`` 是返回条数；评测做消融时才需要看第 6 名以后的候选。"""
         chunks = self.index.chunks(space, material_id)
         chunks, search_query, scoped_ids = course_scope(query, chunks)
         if not chunks:
             return {"hits": [], "retrieval": "bm25", "dense_status": "no_searchable_text"}
-        scores = bm25(search_query, [c["excerpt"] for c in chunks])
+        scores = self.lexical_scores(chunks, search_query)
         lexical = sorted(
             (i for i, score in enumerate(scores) if score > 0), key=lambda i: (-scores[i], i)
         )
@@ -720,7 +761,7 @@ class Retriever:
                     "dense_rank": dense_ranks.get(i),
                 }
             )
-            if len(hits) == 5:
+            if len(hits) == depth:
                 break
         return {
             "hits": hits,

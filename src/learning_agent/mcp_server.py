@@ -11,7 +11,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from learning_agent.retrieval import bm25, course_scope
+from learning_agent.retrieval import Bm25Index, bm25, course_scope
 from learning_agent.store import Store
 
 SERVER_INSTRUCTIONS = """Learning Agent 的只读资料服务器。
@@ -26,6 +26,7 @@ class McpWorkspace:
             raise ValueError(f"找不到本地工作区：{self.root / 'workspace.db'}")
         self.store = Store(self.root)
         self.spaces = self.store.spaces()
+        self._lexical: dict[tuple[str, str | None], tuple[tuple[str, ...], Bm25Index]] = {}
         self.default_space = (
             self._resolve(space)
             if space
@@ -96,7 +97,7 @@ class McpWorkspace:
         sid = self.space_id(space_id)
         if material_id:
             self.store.material(sid, material_id)
-        chunks = self._chunks(sid, material_id)
+        chunks, index = self._chunks_and_index(sid, material_id)
         if not chunks:
             return {
                 "space_id": sid,
@@ -106,7 +107,11 @@ class McpWorkspace:
                 "detail": "该资料空间还没有已建立的分段；请先在网页打开资料或准备索引。MCP 不写入索引。",
             }
         scoped, search_query, scoped_ids = course_scope(query, chunks)
-        scores = bm25(search_query, [chunk["excerpt"] for chunk in scoped])
+        scores = (
+            index.scores(search_query)
+            if len(scoped) == len(chunks)
+            else bm25(search_query, [chunk["excerpt"] for chunk in scoped])
+        )
         ranking = sorted(
             (index for index, score in enumerate(scores) if score > 0),
             key=lambda index: (-scores[index], index),
@@ -188,6 +193,18 @@ class McpWorkspace:
             "page_url": f"/api/spaces/{sid}/materials/{material_id}/pages/{page}/image",
             "detail": detail,
         }
+
+    def _chunks_and_index(self, sid: str, material_id: str | None):
+        """分块照旧从库里读，分词统计按块集合缓存——重新分块时签名变化自动重建。"""
+        key = (sid, material_id)
+        chunks = self._chunks(sid, material_id)
+        signature = tuple(chunk["chunk_id"] for chunk in chunks)
+        cached = self._lexical.get(key)
+        if cached and cached[0] == signature:
+            return chunks, cached[1]
+        index = Bm25Index([chunk["excerpt"] for chunk in chunks])
+        self._lexical[key] = (signature, index)
+        return chunks, index
 
     def _chunks(self, space_id: str, material_id: str | None = None) -> list[dict[str, Any]]:
         with self.store.connect() as db:
