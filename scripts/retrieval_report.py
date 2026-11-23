@@ -86,13 +86,19 @@ def run(store, settings, space, queries, assets, embedder=None):
     grouped = {}
     for row in scored:
         grouped.setdefault(row["modality"], []).append(row)
+    # 档位名必须带上精排：``--rerank-model`` 一开，这一档就不是"混合"而是"混合+精排"。
+    # 只报 ``hybrid`` 会让人把两个数混着比（0.64 与 0.81 差的就是精排）。
+    label = settings.retrieval_mode
+    if settings.rerank_model and settings.retrieval_mode == "hybrid":
+        label = "hybrid+rerank"
     return {
-        "mode": settings.retrieval_mode,
+        "mode": label,
         # 每条结果自带"是哪套配置跑出来的"：模型换了以后，没有这几行就没法判断
         # 两个 JSON 里的分数能不能相互比较（上一版就出过这种混淆）。
         "provider": settings.embedding_provider,
         "embedding_model": settings.embedding_model if settings.retrieval_mode != "bm25" else None,
         "rerank_model": settings.rerank_model or None,
+        "rerank_candidates": settings.rerank_candidates if settings.rerank_model else None,
         "hit_at_5": metrics(scored)["hit_at_5"],
         "mrr_at_5": metrics(scored)["mrr_at_5"],
         "by_modality": {name: metrics(items) for name, items in sorted(grouped.items())},
@@ -122,6 +128,12 @@ def main():
         help="ollama/compatible 的地址；只有这两个 provider 用到",
     )
     parser.add_argument("--rerank-model", default="", help="交叉编码器模型；留空只报召回")
+    parser.add_argument(
+        "--rerank-candidates",
+        type=int,
+        default=None,
+        help="只重排融合后的前 N 个候选；缺省用产品默认值（20）",
+    )
     parser.add_argument(
         "--model-cache",
         default=str(Path.home() / ".cache" / "la-models"),
@@ -160,10 +172,12 @@ def main():
         embedding_provider=args.provider,
         embedding_base_url=args.base_url,
         embedding_cache_dir=args.model_cache,
-        # 这一档报的是"混合检索"，产品默认还会再走一遍精排；
-        # 精排的效果单独由 rerank_experiment.py 报，两档不能混在一起。
+        # 传了 --rerank-model 这一档就是"混合+精排"；档位名会带上 +rerank，
+        # 免得和纯混合的 0.64 混着比。要在两档之间做选择，用 --rerank-model 留空
+        # 跑一次即可（BM25 基线那一档始终不带精排）。
         rerank_model=args.rerank_model,
         **({"embedding_model": args.model} if args.model else {}),
+        **({"rerank_candidates": args.rerank_candidates} if args.rerank_candidates else {}),
     )
     if hybrid.embedding_model:
         embedder = Embedder(hybrid)
