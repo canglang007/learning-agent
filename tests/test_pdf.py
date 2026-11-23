@@ -19,6 +19,24 @@ from learning_agent.store import Store
 from learning_agent.tools import MaterialTools, definitions
 
 
+@pytest.fixture(autouse=True)
+def text_layer_only(monkeypatch):
+    """Keep these tests on the PDF text layer.
+
+    A raster-only page is now recognised on demand when someone reads it, which
+    would make the expected text depend on whether the optional engine happens
+    to be installed. On-demand recognition has its own coverage in test_ocr.
+    """
+    import learning_agent.ocr as ocr_module
+
+    monkeypatch.setattr(ocr_module, "available", lambda: False)
+
+    def refuse(_png):
+        raise AssertionError("本文件只测文字层，不应调用 OCR")
+
+    monkeypatch.setattr(ocr_module, "recognize", refuse)
+
+
 def pdf_bytes():
     buffer = io.BytesIO()
     doc = canvas.Canvas(buffer, pagesize=(500, 400))

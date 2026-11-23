@@ -159,7 +159,6 @@ class Reranker:
             raise RerankError("rerank_failed:" + type(error).__name__) from None
 
 
-
 class Embedder:
     """把文本变成归一化向量。
 
@@ -505,13 +504,21 @@ class CourseIndex:
             if "end_seconds" in c:
                 entries[key]["end_seconds"] = c["end_seconds"]
         if material["format"] == "pdf":
-            for page in self.store.pages(space, material_id):
-                if page["page"] not in entries:
-                    entries[page["page"]] = {
-                        "page": page["page"],
+            pages = {page["page"]: page for page in self.store.pages(space, material_id)}
+            for number, page in pages.items():
+                entry = entries.get(number)
+                if entry is None:
+                    entries[number] = {
+                        "page": number,
                         "chunk_id": None,
-                        "label": "无可提取文字，需查看页面图像",
+                        "label": "无可提取文字，需查看页面图像"
+                        if page["text_source"] == "none"
+                        else "识别后仍无可读文字，需查看页面图像",
                     }
+                    entry = entries[number]
+                # The reader should see which pages are scans before spending a
+                # tool call on them; recognition is per-page and only on demand.
+                entry["text_source"] = page["text_source"]
             entries = dict(sorted(entries.items()))
         elif material["format"] in {"audio", "video"}:
             info = self.store.media(space, material_id)

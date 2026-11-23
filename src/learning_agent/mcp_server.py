@@ -26,8 +26,10 @@ class McpWorkspace:
             raise ValueError(f"找不到本地工作区：{self.root / 'workspace.db'}")
         self.store = Store(self.root)
         self.spaces = self.store.spaces()
-        self.default_space = self._resolve(space) if space else (
-            self.spaces[0]["id"] if len(self.spaces) == 1 else None
+        self.default_space = (
+            self._resolve(space)
+            if space
+            else (self.spaces[0]["id"] if len(self.spaces) == 1 else None)
         )
 
     def _resolve(self, value: str) -> str:
@@ -70,6 +72,7 @@ class McpWorkspace:
                         "format",
                         "revision",
                         "page_count",
+                        "pages_without_text",
                         "media_state",
                         "transcript_state",
                     )
@@ -149,9 +152,7 @@ class McpWorkspace:
             "detail": "MCP 只做本地 BM25，不调用向量服务；排名不是正确性概率。",
         }
 
-    def read_page(
-        self, material_id: str, page: int, space_id: str | None = None
-    ) -> dict[str, Any]:
+    def read_page(self, material_id: str, page: int, space_id: str | None = None) -> dict[str, Any]:
         if page < 1:
             raise ValueError("page 从 1 开始")
         sid = self.space_id(space_id)
@@ -164,8 +165,16 @@ class McpWorkspace:
                 "该页文字来自 OCR（扫描页），可能有错字、公式符号错误或顺序错误；"
                 "图表与公式排版需要在网页看图像。"
             )
+        elif source == "blank":
+            detail = (
+                "该页已识别过，仍没有可读文字（纯图页或空白页）；文字通道拿不到内容，"
+                "需要在网页查看图像。"
+            )
         elif source == "none":
-            detail = "该页没有可提取文字（扫描页或纯图页），文字通道拿不到内容，需要在网页查看图像。"
+            detail = (
+                "该页没有可提取文字（扫描页或纯图页），文字通道拿不到内容，需要在网页查看图像；"
+                "在网页里读到这一页时会当场识别，本只读服务不写库。"
+            )
         return {
             "space_id": sid,
             "material_id": material_id,
@@ -217,9 +226,7 @@ def create_server(data_root: str | Path, space: str | None = None) -> FastMCP:
             raise ValueError(str(error)) from None
 
     @server.tool()
-    def read_page(
-        material_id: str, page: int, space_id: str | None = None
-    ) -> dict[str, Any]:
+    def read_page(material_id: str, page: int, space_id: str | None = None) -> dict[str, Any]:
         """读取 PDF 指定物理页的提取文字；不渲染图片，不返回原始文件路径。"""
         try:
             return workspace.read_page(material_id, page, space_id)

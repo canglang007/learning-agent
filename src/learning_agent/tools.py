@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from learning_agent import ocr
 from learning_agent.learning import Explanation
 from learning_agent.media import MediaError, sample_times
 from learning_agent.pdf import PdfError
@@ -81,12 +82,12 @@ ARGUMENTS = {
     "recall_learning_context": RecallArgs,
 }
 DESCRIPTIONS = {
-    "list_materials": "查看当前空间的资料目录，包含格式与PDF物理页数。",
+    "list_materials": "查看当前空间的资料目录，包含格式与PDF物理页数；pages_without_text为文字层为空、尚未识别的扫描页数。",
     "search_materials": "搜索资料段落：BM25与已就绪的多语言向量按RRF融合；不可用时明确降级。material_id=null搜索全空间，或指定资料缩小范围。结果包含chunk_id和原始页码/时间；无结果可改写查询或查目录。",
     "material_outline": "分页查看指定资料的导航。PDF按物理页首行、音视频按5分钟时间分组、文字按段落；不是语义章节识别。start为从0开始的目录偏移，limit最多30；next_start可继续翻页。",
     "read_context": "按搜索/目录返回的chunk_id读取原段及前后最多各2段。用于补充定义、条件、推导上下文，再决定是否读整页、查看图像或检查视频。字幕更新后旧chunk_id会失效，应重新搜索。",
     "read_passage": "读取资料原文与行号。范围最多50行；获取推导条件、定义或前后文。",
-    "read_page": "读取PDF指定物理页的文字与行号。text_source标明来源：text为文件自带文字层，ocr为扫描页识别结果（可能有错字或顺序错误），none表示该页无文字需改用inspect_page。图表关系/公式排版不能仅凭文字判断。",
+    "read_page": "读取PDF指定物理页的文字与行号。text_source标明来源：text为文件自带文字层；ocr为扫描页识别结果，读到无文字页时会当场识别这一页（只让其可读，未进入检索索引），可能有错字或顺序错误；none/blank表示该页没有文字，需改用inspect_page。图表关系/公式排版不能仅凭文字判断。",
     "inspect_page": "实际查看PDF页面图像以理解图表、公式和排版。page是从1开始的物理页。region=null查看整页，或用左上角原点的归一化[left,top,right,bottom]裁切区域，值在0到1之间。",
     "inspect_media": "读取音视频指定时间段（最多120秒）。transcript读取有时间戳字幕；joint同时抽样最多3帧，受本轮共享图像预算限制。返回字幕来源、实际帧时间和回放链接。不是逐帧观看或直接听音频，缺字幕时不能编造讲话内容。",
     "deliver_explanation": "最终交付讲解与简短学习工作记录，一次完成、无需后续模型调用。answer为给用户的Markdown正文，其他字段记录主题、卡点及实际讲法，不代表掌握。必须独立于其他工具调用，先看完所需观察再交付。",
@@ -227,6 +228,7 @@ class MaterialTools:
                     "detail": "字幕可能存在识别错误或空白，覆盖率仅表示字幕区间覆盖；图像为标注时间附近抽样帧，不代表观看或听完连续片段。",
                 }
             if name in {"read_page", "inspect_page"}:
+                settings = self.retriever.settings
                 page = self.store.page(self.space_id, args.material_id, args.page)
                 result = {
                     "material_id": args.material_id,
@@ -235,9 +237,23 @@ class MaterialTools:
                     "page_url": f"/api/spaces/{self.space_id}/materials/{args.material_id}/pages/{args.page}/image",
                 }
                 if name == "read_page":
+                    source = page.get("text_source") or "text"
+                    recognized_now, ocr_error = False, None
+                    # A scanned page is recognised when someone actually asks to
+                    # read it, not for the whole document at upload time. This
+                    # keeps a 300-page scan from paying 300 recognitions that
+                    # nobody asked for, and it costs one page at a time.
+                    if source == "none" and settings.ocr_enabled and ocr.available():
+                        try:
+                            page = ocr.recognize_page(
+                                self.store, self.space_id, args.material_id, args.page
+                            )
+                            source = page.get("text_source") or "none"
+                            recognized_now = source == "ocr"
+                        except ocr.OcrError as error:
+                            ocr_error = str(error)
                     lines = page["text"].splitlines()
                     text = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines))
-                    source = page.get("text_source") or "text"
                     observed = {
                         **result,
                         "text": text[:12000],
@@ -246,10 +262,27 @@ class MaterialTools:
                         "has_text": bool(text.strip()),
                         "text_source": source,
                     }
-                    if source == "ocr":
+                    if source == "ocr" and recognized_now:
+                        observed["detail"] = (
+                            "该页没有可提取文字层，本次按需识别，只让这一页可读；"
+                            "它还没有写入检索索引，搜索仍找不到这一页。"
+                            "识别可能有错字、公式符号错误或阅读顺序错误，"
+                            "公式与版面请结合 inspect_page 的图像确认。"
+                        )
+                    elif source == "ocr":
                         observed["detail"] = (
                             "该页无可提取文字层，内容来自 OCR 识别，可能存在错字、公式符号错误"
                             "或阅读顺序错误；涉及图表与公式的结论应结合 inspect_page 的图像确认。"
+                        )
+                    elif source == "blank":
+                        observed["detail"] = (
+                            "该页按需识别后仍无可读文字（纯图页或空白页），请使用 inspect_page "
+                            "查看图像，不要根据空白文字推测内容。"
+                        )
+                    elif source == "none" and ocr_error:
+                        observed["detail"] = (
+                            f"该页没有可提取文字，按需识别失败：{ocr_error}。"
+                            "可改用 inspect_page 查看图像，不要根据空白文字推测内容。"
                         )
                     elif source == "none":
                         observed["detail"] = (

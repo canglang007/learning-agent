@@ -229,7 +229,7 @@ def test_rerank_reorders_candidates_and_degrades_honestly(tmp_path):
     store = Store(tmp_path)
     space = store.space("course")["id"]
     # 两份材料都不含查询词（BM25 全空），词汇通道无法区分；重排器按关键词决定顺序
-    first = store.add_material(space, "a.md", "alpha beta gamma")
+    store.add_material(space, "a.md", "alpha beta gamma")
     second = store.add_material(space, "b.md", "delta epsilon zeta")
     config = Settings(_env_file=None, rerank_model="fake", rerank_candidates=2)
     retriever = Retriever(store, config)

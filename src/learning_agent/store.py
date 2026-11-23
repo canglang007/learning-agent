@@ -109,7 +109,9 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
                 db.execute(
                     "ALTER TABLE media ADD COLUMN transcript_revision INTEGER NOT NULL DEFAULT 0"
                 )
-            conversation_columns = {row[1] for row in db.execute("PRAGMA table_info(conversations)")}
+            conversation_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(conversations)")
+            }
             if "owner" not in conversation_columns:
                 db.execute("ALTER TABLE conversations ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
             page_columns = {row[1] for row in db.execute("PRAGMA table_info(material_pages)")}
@@ -209,7 +211,12 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
             ]
 
     def ocr_pending_pages(self, space_id, material_id):
-        """Pages that still have no text, in physical order."""
+        """Pages whose text was never attempted, in physical order.
+
+        ``blank`` pages are excluded: recognition already ran there and found
+        nothing, so retrying them would burn inference on every read of a
+        figure-only page.
+        """
         self.material(space_id, material_id)
         with self.connect() as db:
             return [
@@ -220,12 +227,26 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
                 )
             ]
 
+    def page_counts(self, space_id, material_id):
+        """How many pages carry a text layer, OCR text, or nothing at all."""
+        self.material(space_id, material_id)
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT text_source,count(*) FROM material_pages WHERE material_id=? GROUP BY text_source",
+                (material_id,),
+            ).fetchall()
+        counts = {"text": 0, "ocr": 0, "none": 0, "blank": 0}
+        counts.update({row[0]: row[1] for row in rows})
+        return counts
+
     def save_ocr_page(self, space_id, material_id, page, text):
         """Store OCR output for one page without touching the material revision.
 
-        The revision bump happens once in :meth:`finalize_ocr` so that an
-        interrupted run resumes on the remaining pages instead of rebuilding
-        the index after every single page.
+        Two callers share this write. The background job saves every page and
+        bumps the revision once in :meth:`finalize_ocr`, so an interrupted run
+        resumes on the remaining pages instead of rebuilding the index after
+        every single page. An on-demand read also lands here, and deliberately
+        stops there: the page becomes readable without invalidating the index.
         """
         self.material(space_id, material_id)
         with self.connect() as db:
@@ -236,8 +257,27 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
             if not cursor.rowcount:
                 raise LookupError("该资料没有此 PDF 页面")
 
+    def mark_page_blank(self, space_id, material_id, page):
+        """Record that recognition ran on a page and found no text at all.
+
+        Keeping this distinct from ``none`` is what stops a figure-only page
+        from being recognised again on every read.
+        """
+        self.material(space_id, material_id)
+        with self.connect() as db:
+            cursor = db.execute(
+                "UPDATE material_pages SET text_source='blank' WHERE material_id=? AND page=?",
+                (material_id, page),
+            )
+            if not cursor.rowcount:
+                raise LookupError("该资料没有此 PDF 页面")
+
     def finalize_ocr(self, space_id, material_id):
-        """Rebuild the joined text and bump the revision so chunks are regenerated."""
+        """Rebuild the joined text and bump the revision so chunks are regenerated.
+
+        Returns False when no page carries recognised text, in which case the
+        material is left exactly as it was and no index work is queued.
+        """
         self.material(space_id, material_id)
         with self.connect() as db:
             rows = db.execute(
@@ -292,7 +332,7 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
             return [
                 dict(row)
                 for row in db.execute(
-                    "SELECT m.id,m.name,m.format,m.revision,(SELECT count(*) FROM material_pages p WHERE p.material_id=m.id) AS page_count,media.state AS media_state,media.transcript_state FROM materials m LEFT JOIN media ON media.material_id=m.id WHERE m.space_id=? ORDER BY m.rowid",
+                    "SELECT m.id,m.name,m.format,m.revision,(SELECT count(*) FROM material_pages p WHERE p.material_id=m.id) AS page_count,(SELECT count(*) FROM material_pages p WHERE p.material_id=m.id AND p.text_source='none') AS pages_without_text,media.state AS media_state,media.transcript_state FROM materials m LEFT JOIN media ON media.material_id=m.id WHERE m.space_id=? ORDER BY m.rowid",
                     (space_id,),
                 )
             ]
@@ -545,9 +585,7 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
 
     def run_conversation(self, run_id):
         with self.connect() as db:
-            row = db.execute(
-                "SELECT conversation_id FROM runs WHERE id=?", (run_id,)
-            ).fetchone()
+            row = db.execute("SELECT conversation_id FROM runs WHERE id=?", (run_id,)).fetchone()
         if row is None:
             raise LookupError("问答任务不存在")
         return row["conversation_id"]
@@ -562,7 +600,9 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
         with self.connect() as db:
             run_ids = [
                 row["id"]
-                for row in db.execute("SELECT id FROM runs WHERE conversation_id=?", (conversation_id,))
+                for row in db.execute(
+                    "SELECT id FROM runs WHERE conversation_id=?", (conversation_id,)
+                )
             ]
             tables = [
                 row["name"]
@@ -573,14 +613,10 @@ class Store(AccountStore, MemoryStore, ExecutionStore, RunStore, DraftStore):
                     continue
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if "conversation_id" in columns:
-                    db.execute(
-                        f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,)
-                    )
+                    db.execute(f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,))
                 if "run_id" in columns and run_ids:
                     placeholders = ",".join("?" * len(run_ids))
-                    db.execute(
-                        f"DELETE FROM {table} WHERE run_id IN ({placeholders})", run_ids
-                    )
+                    db.execute(f"DELETE FROM {table} WHERE run_id IN ({placeholders})", run_ids)
             db.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
 
     def messages(self, conversation_id):

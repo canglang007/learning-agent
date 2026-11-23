@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     ocr_enabled: bool = True
     """对没有文字层的 PDF 页做 OCR（扫描件）。只处理文字为空的页；引擎依赖可选包
     ``uv sync --extra ocr``，未安装时扫描页保持不可检索并在页面信息里标明。"""
+    ocr_on_upload: bool = False
+    """上传后是否立刻整本识别。默认关闭：识别按需发生——读到哪一页才识别哪一页，
+    只有明确要求整篇可检索时才触发整本识别。"""
     ocr_min_text_characters: int = Field(default=20, ge=0, le=500)
     """文字层字符数低于该值的页视为无可提取文字，进入 OCR。"""
     retrieval_mode: Literal["lexical_baseline", "bm25", "hybrid"] = "hybrid"

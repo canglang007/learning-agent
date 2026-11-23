@@ -103,6 +103,23 @@ class Jobs:
             else json.loads(row["metadata"])["original_path"]
         )
 
+    def queue_index(self, space, settings):
+        """Queue an index rebuild after material text changed.
+
+        Publishing a transcript, recognising scanned pages or editing a source
+        all invalidate that material's chunks. Without this the space keeps
+        serving a stale (or empty) index until someone notices a search that
+        should have matched and clicks "build index" by hand. Nothing is queued
+        when no embedding provider is configured, because that job could only
+        fail.
+        """
+        if settings.embedding_provider == "disabled":
+            return None
+        try:
+            return self.enqueue("index", space, settings)
+        except JobConflict:
+            return None
+
     def enqueue(self, kind, space, settings, material=None):
         self.store.require_space(space)
         if material:

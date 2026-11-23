@@ -120,6 +120,7 @@ def create_app(settings=None, provider=None):
     async def healthz():
         # 不设口令时也应有健康检查；部署脚本和反向代理需要这个入口。
         return {"ok": True}
+
     app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 
     @app.exception_handler(MediaError)
@@ -239,7 +240,11 @@ def create_app(settings=None, provider=None):
         material = store.material(space_id, material_id)
         if payload.start_seconds and material["format"] not in {"audio", "video"}:
             raise HTTPException(422, "原始时间偏移仅适用于音视频")
-        return store.set_source(space_id, material_id, payload.model_dump(mode="json"))
+        updated = store.set_source(space_id, material_id, payload.model_dump(mode="json"))
+        # A different source rewrites every chunk of this material; rebuild the
+        # index here so the space never sits on an empty index by accident.
+        jobs.queue_index(space_id, settings)
+        return updated
 
     @app.post("/api/spaces/{space_id}/materials", status_code=201)
     async def upload(space_id: str, file: UploadFile, response: Response):
@@ -272,8 +277,16 @@ def create_app(settings=None, provider=None):
                 )
             except PdfError as error:
                 raise HTTPException(422, str(error)) from None
-            if settings.ocr_enabled and item["ocr_pending"] and ocr_available():
-                # Queued, never run inline: a scanned book is hundreds of pages.
+            if (
+                settings.ocr_on_upload
+                and settings.ocr_enabled
+                and item["ocr_pending"]
+                and ocr_available()
+            ):
+                # Opt-in only: recognising a whole scan on upload costs one
+                # inference per page and nobody may ever read those pages.
+                # Queued rather than inline, because a scanned book is hundreds
+                # of pages; the default path recognises a page when it is read.
                 try:
                     item["ocr_job"] = jobs.enqueue("ocr", space_id, settings, item["id"])
                 except JobConflict:
@@ -345,6 +358,7 @@ def create_app(settings=None, provider=None):
         store.save_segments(
             space_id, material_id, segments, "uploaded:" + (file.filename or "captions")[:200]
         )
+        jobs.queue_index(space_id, settings)
         return {"segment_count": len(segments), "transcript_state": "ready"}
 
     @app.post("/api/spaces/{space_id}/materials/{material_id}/ocr", status_code=202)
@@ -599,18 +613,14 @@ def create_app(settings=None, provider=None):
     @app.post("/api/spaces/{space_id}/memories", status_code=201)
     async def create_memory(space_id: str, payload: MemoryCreate, request: Request):
         try:
-            return store.create_memory(
-                space_id, payload.model_dump(), accounts.owner_key(request)
-            )
+            return store.create_memory(space_id, payload.model_dump(), accounts.owner_key(request))
         except LearningConflict:
             raise
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 
     @app.patch("/api/spaces/{space_id}/memories/{memory_id}")
-    async def update_memory(
-        space_id: str, memory_id: str, payload: MemoryEdit, request: Request
-    ):
+    async def update_memory(space_id: str, memory_id: str, payload: MemoryEdit, request: Request):
         try:
             return store.edit_memory(
                 space_id, memory_id, payload.model_dump(), owner=accounts.owner_key(request)

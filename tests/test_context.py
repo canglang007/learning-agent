@@ -17,11 +17,11 @@ from learning_agent.tools import MaterialTools
 
 
 def small_settings(tmp_path, **changes):
-    defaults = dict(
-        context_budget_tokens=18000,
-        context_output_reserve_tokens=512,
-        context_headroom_tokens=512,
-    )
+    defaults = {
+        "context_budget_tokens": 18000,
+        "context_output_reserve_tokens": 512,
+        "context_headroom_tokens": 512,
+    }
     defaults.update(changes)
     return Settings(
         _env_file=None,

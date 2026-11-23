@@ -245,13 +245,19 @@ class Worker:
             job=job,
             allow_empty=True,
         )
+        # New subtitles invalidate this material's chunks; rebuild without being
+        # asked, otherwise the freshly transcribed lecture stays unsearchable.
+        self.jobs.queue_index(job["space_id"], self.settings)
 
     def ocr(self, job):
         """Recognise pages that carry no text layer, one committed page at a time.
 
         Per-page results are written without touching the material revision, so a
         pause or crash resumes on the remaining pages. The single revision bump in
-        ``finalize_ocr`` is what makes the retrieval index rebuild afterwards.
+        ``finalize_ocr`` is what makes the retrieval index rebuild afterwards, and
+        that rebuild is queued here rather than left to a manual click: recognised
+        text that nobody can search is the side effect this job used to leave
+        behind.
         """
         from learning_agent.ocr import recognize
         from learning_agent.pdf import render_page
@@ -264,12 +270,23 @@ class Worker:
             for done, page in enumerate(pending):
                 self.jobs.checkpoint(job, f"page-{page}", done, total)
                 png, _, _ = render_page(path, page)
-                self.store.save_ocr_page(space, material, page, recognize(png)["text"])
+                text = recognize(png)["text"]
+                if text.strip():
+                    self.store.save_ocr_page(space, material, page, text)
+                else:
+                    # Remember the attempt: this page is a figure or a blank
+                    # scan, and re-running it every time would be wasted work.
+                    self.store.mark_page_blank(space, material, page)
             self.jobs.checkpoint(job, "publish_text", total, total)
-        self.store.finalize_ocr(space, material)
+        published = self.store.finalize_ocr(space, material)
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.jobs.finish(job, db)
+        if published:
+            # Revision changed, so every chunk of this material will be rebuilt.
+            # Queue that rebuild now instead of asking the reader to notice a
+            # stale index and trigger it by hand.
+            self.jobs.queue_index(space, self.settings)
 
     def index(self, job):
         def observe(stage, completed, total, batch, db=None):

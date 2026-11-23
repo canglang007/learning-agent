@@ -88,3 +88,32 @@ def recognize(png):
     text = "\n".join(row["text"] for row in rows)
     mean = round(sum(row["score"] for row in rows) / len(rows), 3) if rows else 0.0
     return {"text": text, "lines": len(rows), "mean_score": mean}
+
+
+def recognize_page(store, space_id, material_id, page):
+    """Recognise one page because a reader just asked for it, then cache the text.
+
+    Two paths exist for the same engine on purpose. The background ``ocr`` job is
+    the "make this document searchable" path: it walks every page and bumps the
+    material revision once at the end, which is what regenerates chunks. This
+    path is the opposite trade-off — it only makes the page in front of the
+    reader readable *now*, so it leaves the revision untouched: no chunk is
+    regenerated, no index is invalidated, no rebuild is queued. The page becomes
+    readable, not searchable. Publishing stays an explicit action.
+
+    A page that yields no text (a pure figure, a blank scan) is marked ``blank``
+    rather than relabelled as recognised content, so an empty result is not
+    mistaken for text and is not attempted again on the next read.
+    """
+    from learning_agent.pdf import render_page
+
+    row = store.page(space_id, material_id, page)
+    if (row.get("text_source") or "text") != "none":
+        return row
+    png, _, _ = render_page(store.root / "materials" / (material_id + ".pdf"), page)
+    text = recognize(png)["text"]
+    if not text.strip():
+        store.mark_page_blank(space_id, material_id, page)
+    else:
+        store.save_ocr_page(space_id, material_id, page, text)
+    return store.page(space_id, material_id, page)
