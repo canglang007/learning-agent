@@ -62,7 +62,10 @@ class Settings(BaseSettings):
     ocr_min_text_characters: int = Field(default=20, ge=0, le=500)
     """文字层字符数低于该值的页视为无可提取文字，进入 OCR。"""
     retrieval_mode: Literal["lexical_baseline", "bm25", "hybrid"] = "hybrid"
-    embedding_provider: Literal["disabled", "ollama", "compatible", "local"] = "disabled"
+    embedding_provider: Literal["disabled", "ollama", "compatible", "local"] = "local"
+    """默认 ``local``：进程内 ONNX 多语言小模型，不需要外部服务，首次使用下载约 470 MB。
+    需要 ``uv sync --extra embed``；没装时索引进入 failed 并如实退回 BM25（`dense_status` 会说明）。
+    只要关键词检索就设 ``disabled``。"""
     embedding_base_url: str = "http://localhost:11434"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     embedding_api_key: SecretStr = SecretStr("")
@@ -71,18 +74,18 @@ class Settings(BaseSettings):
     """``local`` 模式的推理线程数；0 表示交给 onnxruntime 按核数决定。"""
     embedding_cache_dir: str = ""
     """``local`` 模式的模型缓存目录；留空则用 ``LA_DATA_ROOT/models``。"""
-    rerank_model: str = ""
-    """交叉编码器重排模型（fastembed TextCrossEncoder，如 BAAI/bge-reranker-base）。
-    留空关闭；``.env.example`` 与 ``start.sh`` 默认开启。
+    rerank_model: str = "BAAI/bge-reranker-base"
+    """交叉编码器重排模型（fastembed TextCrossEncoder）。
+    留空关闭；默认开启，要关就显式设成空字符串（``LA_RERANK_MODEL=``）。
 
     实测（v5，7 讲 942 块、83 道可评分题）：
 
     - 混合检索 Hit@5 0.548 → 加精排 **0.714**，MRR 0.394 → 0.564；
-      any 类题 0.575 → 0.750；
+      产品路径（depth=5）是 0.554 → **0.723**，any 类题 0.575 → 0.750；
     - 不开向量、只给 BM25 候选加精排是 0.524——精排不能替代向量召回，
       两者各管一段；
     - 代价：权重约 1.1 GB（首次使用要下载），单次查询多约 0.9 秒
-      （默认 20 个候选逐对推理，CPU）。内存紧或网速差的机器保持留空。
+      （默认 20 个候选逐对推理，CPU）。内存紧或网速差的机器把这两项关掉。
 
     重排只作用于融合后的前 ``rerank_candidates`` 个候选，不改变召回集合。
     """

@@ -82,7 +82,10 @@ def evaluate_retrieval(experiment, queries, settings, *, max_embeddings=12):
     for mode in ("bm25", "hybrid"):
         config = configuration(
             settings,
-            {"retrieval_mode": mode},
+            # 组件评测只报两档召回：精排是叠在上面的第三档，由
+            # scripts/rerank_experiment.py 单独测。产品默认开精排，这里显式关掉，
+            # 否则"混合"那档会悄悄变成"混合+精排"。
+            {"retrieval_mode": mode, "rerank_model": ""},
             data_root=root / "corpus",
             evaluation_budget_path=None,
         )

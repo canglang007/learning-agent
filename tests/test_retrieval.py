@@ -291,3 +291,15 @@ def test_bm25_statistics_are_built_once_per_corpus_version(tmp_path):
     store.add_material(space, "c.md", "normalization appears here too")
     retriever.search(space, "normalization")
     assert len(retriever.lexical_index) == 2
+
+
+def test_defaults_ask_for_full_retrieval():
+    """默认配置就要完整检索：向量 + 精排。
+
+    conftest 在测试环境里把这两项关掉（不下载 1.6 GB 模型），所以默认值本身
+    需要单独守着——不然把默认改回 disabled 也不会有人发现。
+    """
+    fields = Settings.model_fields
+    assert fields["retrieval_mode"].default == "hybrid"
+    assert fields["embedding_provider"].default == "local"
+    assert fields["rerank_model"].default == "BAAI/bge-reranker-base"

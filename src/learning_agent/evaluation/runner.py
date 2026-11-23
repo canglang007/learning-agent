@@ -26,6 +26,7 @@ ALLOWED = {
     "retrieval_mode",
     "embedding_provider",
     "embedding_model",
+    "rerank_model",
     "max_steps",
     "context_budget_tokens",
     "context_headroom_tokens",

@@ -127,7 +127,13 @@ def main():
     queries = json.loads(args.queries.read_text(encoding="utf-8"))["queries"]
     assets = load_assets(args.assets, store, space)
 
-    base = Settings(_env_file=None, data_root=work, retrieval_mode="bm25")
+    base = Settings(
+        _env_file=None,
+        data_root=work,
+        retrieval_mode="bm25",
+        embedding_provider="disabled",
+        rerank_model="",
+    )
     results = [run(store, base, space, queries, assets)]
 
     hybrid = Settings(
@@ -136,6 +142,9 @@ def main():
         retrieval_mode="hybrid",
         embedding_provider="local",
         embedding_cache_dir=args.model_cache,
+        # 这一档报的是"混合检索"，产品默认还会再走一遍精排；
+        # 精排的效果单独由 rerank_experiment.py 报，两档不能混在一起。
+        rerank_model="",
         **({"embedding_model": args.model} if args.model else {}),
     )
     if hybrid.embedding_model:
