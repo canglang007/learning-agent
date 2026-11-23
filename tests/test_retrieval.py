@@ -294,15 +294,25 @@ def test_bm25_statistics_are_built_once_per_corpus_version(tmp_path):
 
 
 def test_defaults_ask_for_full_retrieval():
-    """默认配置就要完整检索：向量 + 精排。
+    """默认配置就要完整检索：bge-m3（ollama）+ 精排。
 
-    conftest 在测试环境里把这两项关掉（不下载 1.6 GB 模型），所以默认值本身
-    需要单独守着——不然把默认改回 disabled 也不会有人发现。
+    conftest 在测试环境里把这两项关掉（不依赖守护进程、不下载精排权重），所以
+    默认值本身需要单独守着——不然把默认改回 disabled 也不会有人发现。
+
+    这里还守一条更重要的不变式：**provider 与模型名必须是一对**。``ollama`` 要
+    的是 ollama 的模型标签（``bge-m3``），``local`` 要的是 fastembed 的 ONNX 模型名
+    （``sentence-transformers/...``）。两者错配时程序不会报错，只会静默退回
+    BM25——数字掉一半而没人知道发生了什么。本项目一直用 ollama + bge-m3，
+    不能因为"ollama 当时没起"就换成 local 的小模型：那是换掉了评测口径。
     """
     fields = Settings.model_fields
     assert fields["retrieval_mode"].default == "hybrid"
-    assert fields["embedding_provider"].default == "local"
+    assert fields["embedding_provider"].default == "ollama"
+    assert fields["embedding_model"].default == "bge-m3"
     assert fields["rerank_model"].default == "BAAI/bge-reranker-base"
+
+    # provider 与模型名的配对约束
+    assert "/" not in fields["embedding_model"].default, "ollama 用的是模型标签，不是 HF 路径"
 
 
 def test_rerank_scores_stay_ordered_and_non_negative(tmp_path):

@@ -62,12 +62,29 @@ class Settings(BaseSettings):
     ocr_min_text_characters: int = Field(default=20, ge=0, le=500)
     """文字层字符数低于该值的页视为无可提取文字，进入 OCR。"""
     retrieval_mode: Literal["lexical_baseline", "bm25", "hybrid"] = "hybrid"
-    embedding_provider: Literal["disabled", "ollama", "compatible", "local"] = "local"
-    """默认 ``local``：进程内 ONNX 多语言小模型，不需要外部服务，首次使用下载约 470 MB。
-    需要 ``uv sync --extra embed``；没装时索引进入 failed 并如实退回 BM25（`dense_status` 会说明）。
-    只要关键词检索就设 ``disabled``。"""
+    embedding_provider: Literal["disabled", "ollama", "compatible", "local"] = "ollama"
+    """默认 ``ollama`` + ``bge-m3``：这是本项目一直在用的向量配置。
+
+    三条路的实测差距（v5，7 讲 942 块、83 道可评分题，同一套混合检索只换模型）：
+
+    ======================  =========  ========
+    向量来源                  Hit@5      MRR@5
+    ======================  =========  ========
+    ``local`` MiniLM-L12-v2    0.554      0.394
+    ``ollama`` bge-m3          0.639      0.464
+    ======================  =========  ========
+
+    差 8.5 个点主要来自跨语言术语对齐：中文问「剪枝」要能命中英文 "pruning"，
+    384 维小模型这条链路补不上。**ollama 没启动时不要换模型**，启动它；
+    换模型会把评测口径一起换掉，数字与之前不可比。索引会在 ``dense_status``
+    里如实说明为什么退回 BM25。
+
+    ``local`` 是离线兜底（``uv sync --extra embed``，首次下载约 470 MB），
+    指标明显更低；``compatible`` 走 OpenAI 兼容接口；只要关键词检索就设 ``disabled``。
+    """
     embedding_base_url: str = "http://localhost:11434"
-    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_model: str = "bge-m3"
+    """``ollama`` 用 ``bge-m3``（1024 维）；``local`` 用 fastembed 的 ONNX 模型名。"""
     embedding_api_key: SecretStr = SecretStr("")
     embedding_timeout_seconds: float = Field(default=30, gt=0, le=180)
     embedding_threads: int = Field(default=0, ge=0, le=32)
@@ -78,12 +95,10 @@ class Settings(BaseSettings):
     """交叉编码器重排模型（fastembed TextCrossEncoder）。
     留空关闭；默认开启，要关就显式设成空字符串（``LA_RERANK_MODEL=``）。
 
-    实测（v5，7 讲 942 块、83 道可评分题）：
+    实测（v5，7 讲 942 块、83 道可评分题，向量用 bge-m3）：
 
-    - 混合检索 Hit@5 0.548 → 加精排 **0.714**，MRR 0.394 → 0.564；
-      产品路径（depth=5）是 0.554 → **0.723**，any 类题 0.575 → 0.750；
-    - 不开向量、只给 BM25 候选加精排是 0.524——精排不能替代向量召回，
-      两者各管一段；
+    - 混合检索 Hit@5 **0.639** → 加精排 **0.771**，MRR 0.464 → 0.625；
+    - 分模态：pdf 0.714 → 0.81、video 0.623 → 0.754、text 0.00 → 1.00（仅 1 题）；
     - 代价：权重约 1.1 GB（首次使用要下载），单次查询多约 0.9 秒
       （默认 20 个候选逐对推理，CPU）。内存紧或网速差的机器把这两项关掉。
 
@@ -110,4 +125,14 @@ class Settings(BaseSettings):
             (self.protocol == "responses") != (self.output_token_field == "max_output_tokens")
         ):
             raise ValueError("输出限制字段与所选协议不匹配")
+        # provider 与模型名是一对：``local`` 要 fastembed 的 ONNX 模型名（形如
+        # ``org/model``），``ollama``/``compatible`` 用服务端的模型标识。错配时
+        # fastembed 会把它当成一个 HF 仓库名去下载，报的是"下载失败"而不是
+        # "你配错了"——于是又容易被误读成"网络问题"，进而去换组件。
+        if self.embedding_provider == "local" and "/" not in self.embedding_model:
+            raise ValueError(
+                "LA_EMBEDDING_PROVIDER=local 需要 fastembed 的 ONNX 模型名（形如 "
+                "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2），"
+                f"当前是 {self.embedding_model!r}；要用 ollama 的 bge-m3 请把 provider 设为 ollama"
+            )
         return self

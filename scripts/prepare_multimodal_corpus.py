@@ -17,7 +17,9 @@ settings = Settings(
     _env_file=None,
     data_root=root,
     retrieval_mode="hybrid",
+    # 造语料用进程内模型，不依赖 ollama；评测复制语料后会按自己的模型整批重建。
     embedding_provider="local",
+    embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
 )
 store = Store(root)
 space = store.spaces()[0]["id"]

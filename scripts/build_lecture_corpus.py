@@ -134,7 +134,11 @@ def main():
         _env_file=None,
         data_root=root,
         retrieval_mode="hybrid",
+        # 造语料这一步显式用进程内模型：不需要 ollama 守护进程，结果可复现。
+        # 这里产出的向量不会被评测用到——评测脚本复制语料后会按自己的模型
+        # （默认 bge-m3）整批重建，encoder 指纹不同就判定为待嵌入。
         embedding_provider="local",
+        embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         # 复用共享缓存：不指定时它会在 data_root 下重下一份，几十兆到上百兆，
         # 而且一旦网络卡住整个索引就停在那儿，看上去像在算其实在等下载。
         embedding_cache_dir=str(Path.home() / ".cache" / "la-models"),
