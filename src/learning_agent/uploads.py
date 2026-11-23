@@ -47,7 +47,7 @@ class Uploads:
         self.store.require_space(space)
         suffix = Path(filename).suffix.lower()
         if suffix not in MEDIA_SUFFIXES:
-            raise HTTPException(422, "分块上传用于常用音视频文件")
+            raise HTTPException(422, "分块上传用于音视频文件")
         if not 0 < size <= self.settings.media_max_bytes:
             raise HTTPException(413, f"媒体文件须为1到{self.settings.media_max_bytes}字节")
         identifier, material = str(uuid4()), str(uuid4())

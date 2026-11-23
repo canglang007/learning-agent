@@ -369,3 +369,124 @@ def test_h264_in_mkv_is_remuxed_not_reencoded(tmp_path):
     # 转出来的预览本身必须是浏览器可直接播的，否则等于白转。
     assert probe(config.data_root / preview)["browser_playable"] is True
     assert client.get(base + "/playback", headers={"Range": "bytes=0-99"}).status_code == 206
+
+
+def test_oversized_video_is_downscaled_not_rejected():
+    """超出 4K 不该让用户先去转码：标成 transcode，由 prepare 缩到 1280 宽。"""
+    from learning_agent import media
+
+    v_h264 = {"codec_name": "h264", "pix_fmt": "yuv420p"}
+    assert media.playback_plan(".mp4", v_h264, {"codec_name": "aac"}, oversized=True) == "transcode"
+    assert media.playback_plan(".mp4", v_h264, {"codec_name": "aac"}) == "direct"
+
+
+def test_content_type_follows_real_container():
+    """回放不能一律报 video/mp4：直接可播时给的就是原文件。"""
+    from learning_agent import media
+
+    assert media.content_type("materials/x/original.webm") == "video/webm"
+    assert media.content_type("materials/x/original.mkv") == "video/x-matroska"
+    assert media.content_type("materials/x/original.m4a") == "audio/mp4"
+    assert media.content_type("materials/x/original.mp4") == "video/mp4"
+
+
+def test_avi_and_webm_are_accepted_instead_of_told_to_convert(tmp_path):
+    """mp4 之外的真实文件（avi / webm）应当能直接入库并播放。
+
+    以前它们被后缀白名单挡在门外、被要求"先转成 mp4"——把工具的麻烦推给用户。
+    avi 里的 mpeg4 编码浏览器不认，走重编码；webm 的 vp9+opus 本来就能播，原样提供。
+    """
+    avi = tmp_path / "colors.avi"
+    command(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=160x120:r=10:d=2",
+            "-c:v",
+            "mpeg4",
+            "-f",
+            "avi",
+            str(avi),
+        ]
+    )
+    webm = tmp_path / "colors.webm"
+    command(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=teal:s=160x120:r=10:d=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=2",
+            "-c:v",
+            "libvpx-vp9",
+            "-b:v",
+            "200k",
+            "-c:a",
+            "libopus",
+            "-f",
+            "webm",
+            str(webm),
+        ]
+    )
+    config = Settings(_env_file=None, data_root=tmp_path / "db", asr_provider="disabled")
+    close_for(tmp_path)
+    client = TestClient(create_app(config, Scripted([])))
+    space = client.post("/api/spaces", json={"content": "formats"}).json()["id"]
+
+    ids = {}
+    for name, path in (("colors.avi", avi), ("colors.webm", webm)):
+        upload = client.post(
+            f"/api/spaces/{space}/materials", files={"file": (name, path.read_bytes())}
+        )
+        assert upload.status_code == 202, upload.text
+        ids[name] = upload.json()["id"]
+    with Worker(config) as worker:
+        worker.drain()
+
+    store = Store(config.data_root)
+    avi_info = store.media(space, ids["colors.avi"])
+    assert avi_info["state"] == "ready"
+    assert avi_info["playback"] == "transcode"
+    preview = avi_info["preview_path"]
+    assert preview.endswith(".mp4") and probe(config.data_root / preview)["browser_playable"]
+
+    webm_info = store.media(space, ids["colors.webm"])
+    assert webm_info["state"] == "ready"
+    # vp9 + opus 浏览器本来就能播：不该白转一遍，原文件直接给。
+    assert webm_info["playback"] == "direct"
+    assert webm_info["preview_path"] == webm_info["original_path"]
+    response = client.get(
+        f"/api/spaces/{space}/materials/{ids['colors.webm']}/playback",
+        headers={"Range": "bytes=0-99"},
+    )
+    assert response.status_code == 206
+    assert response.headers["content-type"] == "video/webm"
+
+
+def test_ass_and_utf16_subtitles_are_converted(tmp_path):
+    """B 站的 .ass、UTF-16 的 .srt 都要能用，不能让用户自己先转成 UTF-8 VTT。"""
+    srt = tmp_path / "in.srt"
+    srt.write_text("1\n00:00:00,500 --> 00:00:01,800\n你好 world\n", encoding="utf-8")
+    ass = tmp_path / "out.ass"
+    command(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(srt), str(ass)])
+    segments = parse_captions(ass.read_bytes(), 30, ".ass")
+    assert [s["text"] for s in segments] == ["你好 world"]
+    assert 0.3 < segments[0]["start"] < 0.8 and 1.5 < segments[0]["end"] < 2.2
+
+    utf16 = ("1\n00:00:02,000 --> 00:00:03,000\n中文十六位\n").encode("utf-16")
+    converted = parse_captions(utf16, 30, ".srt")
+    assert [s["text"] for s in converted] == ["中文十六位"]

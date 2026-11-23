@@ -14,7 +14,14 @@ from learning_agent.config import Settings
 from learning_agent.context import profile_id
 from learning_agent.jobs import JobConflict, Jobs
 from learning_agent.learning import Feedback, FeedbackError, LearningConflict, UserStateEdit
-from learning_agent.media import MEDIA_SUFFIXES, MediaError, asr_available, parse_captions
+from learning_agent.media import (
+    MEDIA_SUFFIXES,
+    SUBTITLE_SUFFIXES,
+    MediaError,
+    asr_available,
+    content_type,
+    parse_captions,
+)
 from learning_agent.memory import ContextSettings, MemoryCreate, MemoryEdit, TopicCreate
 from learning_agent.model_registry import status as model_status
 from learning_agent.ocr import available as ocr_available
@@ -26,6 +33,12 @@ from learning_agent.run_store import TERMINAL, RuntimeUnavailable
 from learning_agent.runtime import RuntimeService
 from learning_agent.store import Store
 from learning_agent.uploads import Uploads
+
+# 纯文本资料：UTF-8 解码后整段入库，格式本身不承担语义，没必要用白名单抠门。
+TEXT_SUFFIXES = {
+    ".txt", ".text", ".md", ".markdown", ".rst", ".tex", ".csv", ".tsv",
+    ".json", ".log", ".yaml", ".yml",
+}  # fmt: skip
 
 
 class Text(BaseModel):
@@ -249,8 +262,8 @@ def create_app(settings=None, provider=None):
     @app.post("/api/spaces/{space_id}/materials", status_code=201)
     async def upload(space_id: str, file: UploadFile, response: Response):
         suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in {".txt", ".md", ".pdf"} | MEDIA_SUFFIXES:
-            raise HTTPException(422, "支持文字、PDF、常用音频/视频格式")
+        if suffix not in TEXT_SUFFIXES | {".pdf"} | MEDIA_SUFFIXES:
+            raise HTTPException(422, "支持文字（txt/md/rst/tex/csv/json 等）、PDF 与常见音视频格式")
         if suffix in MEDIA_SUFFIXES:
             session = uploads.create(space_id, (file.filename or "media")[:200], file.size or 0)
             while block := await file.read(uploads.chunk_size):
@@ -337,10 +350,9 @@ def create_app(settings=None, provider=None):
         item = store.media(space_id, material_id)
         if item["state"] != "ready":
             raise HTTPException(409, item["error"] or "媒体仍在准备，请稍后刷新")
-        return FileResponse(
-            store.root / item["preview_path"],
-            media_type="video/mp4" if item["has_video"] else "audio/mp4",
-        )
+        path = store.root / item["preview_path"]
+        # 按实际文件给类型：直接可播时 preview_path 就是原文件，可能是 webm/mov。
+        return FileResponse(path, media_type=content_type(path))
 
     @app.post("/api/spaces/{space_id}/materials/{material_id}/prepare", status_code=202)
     async def retry_media(space_id: str, material_id: str):
@@ -348,13 +360,15 @@ def create_app(settings=None, provider=None):
 
     @app.post("/api/spaces/{space_id}/materials/{material_id}/captions")
     async def captions(space_id: str, material_id: str, file: UploadFile):
-        if Path(file.filename or "").suffix.lower() not in {".srt", ".vtt"}:
-            raise HTTPException(422, "请上传UTF-8 SRT或VTT字幕")
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in SUBTITLE_SUFFIXES:
+            raise HTTPException(422, "支持 SRT / VTT / ASS / SSA / TTML / SBV / SUB 等字幕格式")
         raw = await file.read(2_000_001)
         if len(raw) > 2_000_000:
             raise HTTPException(413, "字幕文件最多2 MB")
         item = store.media(space_id, material_id)
-        segments = parse_captions(raw, item["duration"])
+        # 非 SRT/VTT 由 ffmpeg 先转 VTT 再解析，不要求用户自己转格式。
+        segments = parse_captions(raw, item["duration"], suffix)
         store.save_segments(
             space_id, material_id, segments, "uploaded:" + (file.filename or "captions")[:200]
         )

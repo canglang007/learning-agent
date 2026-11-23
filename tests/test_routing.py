@@ -54,6 +54,12 @@ def test_router_rules():
         "agent",
         "followup_present",
     )
+    # 视频不只有 mp4：文件名/口语里的容器与音频线索都该把请求带进实际查看。
+    assert choose_route("lecture.mkv 里那一段是怎么讲的？") == (
+        "agent",
+        "explicit_visual_or_time",
+    )
+    assert choose_route("这段录音里提到了什么") == ("agent", "explicit_visual_or_time")
     assert choose_route("解释这个概念", policy="agent") == ("agent", "policy_agent")
 
 
@@ -75,13 +81,15 @@ def test_course_codes_come_from_material_names():
         "general_question",
     )
     # 换一门课只需换资料名。
-    assert choose_route(
-        "stat20里怎么讲残差", material_names=["stat20-lecture3.pdf"]
-    ) == ("fixed_rag", "course_code_reference")
+    assert choose_route("stat20里怎么讲残差", material_names=["stat20-lecture3.pdf"]) == (
+        "fixed_rag",
+        "course_code_reference",
+    )
     # 标识必须作为独立词出现，不能命中更长串的一部分。
-    assert choose_route(
-        "我的账号是xcs3367，这个怎么算", material_names=names
-    ) == ("direct", "general_question")
+    assert choose_route("我的账号是xcs3367，这个怎么算", material_names=names) == (
+        "direct",
+        "general_question",
+    )
     # 文件格式词不算课程标识。
     from learning_agent.routing import course_codes
 
@@ -127,9 +135,7 @@ def test_auto_route_direct_uses_no_tools_and_records_route(tmp_path):
     close_for(tmp_path)
     model = Plain("近似需要说明误差条件。")
     client = TestClient(
-        create_app(
-            Settings(_env_file=None, data_root=tmp_path, route_policy="auto"), model
-        )
+        create_app(Settings(_env_file=None, data_root=tmp_path, route_policy="auto"), model)
     )
     space = client.post("/api/spaces", json={"content": "学习"}).json()
     conversation = client.post(f"/api/spaces/{space['id']}/conversations").json()
@@ -138,16 +144,17 @@ def test_auto_route_direct_uses_no_tools_and_records_route(tmp_path):
     assert result["state"] == "completed"
     assert model.calls[0]["tools"] == []
     events = route_events(client, result["run_id"])
-    assert any(event["type"] == "route.selected" and event["payload"]["route"] == "direct" for event in events)
+    assert any(
+        event["type"] == "route.selected" and event["payload"]["route"] == "direct"
+        for event in events
+    )
 
 
 def test_auto_route_fixed_rag_injects_retrieval_and_records_evidence(tmp_path):
     close_for(tmp_path)
     model = Plain("归一化是在分支内做的。")
     client = TestClient(
-        create_app(
-            Settings(_env_file=None, data_root=tmp_path, route_policy="auto"), model
-        )
+        create_app(Settings(_env_file=None, data_root=tmp_path, route_policy="auto"), model)
     )
     space = client.post("/api/spaces", json={"content": "学习"}).json()
     client.post(
@@ -179,9 +186,7 @@ def test_auto_route_reads_course_code_from_workspace_materials(tmp_path):
     close_for(tmp_path)
     model = Plain("归一化在子层内部完成。")
     client = TestClient(
-        create_app(
-            Settings(_env_file=None, data_root=tmp_path, route_policy="auto"), model
-        )
+        create_app(Settings(_env_file=None, data_root=tmp_path, route_policy="auto"), model)
     )
     space = client.post("/api/spaces", json={"content": "学习"}).json()
     client.post(
@@ -212,9 +217,7 @@ def test_auto_route_keeps_agent_for_visual_reference(tmp_path):
     close_for(tmp_path)
     model = Plain("需要实际查看页面。")
     client = TestClient(
-        create_app(
-            Settings(_env_file=None, data_root=tmp_path, route_policy="auto"), model
-        )
+        create_app(Settings(_env_file=None, data_root=tmp_path, route_policy="auto"), model)
     )
     space = client.post("/api/spaces", json={"content": "学习"}).json()
     conversation = client.post(f"/api/spaces/{space['id']}/conversations").json()
@@ -223,4 +226,7 @@ def test_auto_route_keeps_agent_for_visual_reference(tmp_path):
     assert result["state"] == "completed"
     assert model.calls[0]["tools"]
     events = route_events(client, result["run_id"])
-    assert any(event["type"] == "route.selected" and event["payload"]["route"] == "agent" for event in events)
+    assert any(
+        event["type"] == "route.selected" and event["payload"]["route"] == "agent"
+        for event in events
+    )

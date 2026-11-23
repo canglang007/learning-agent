@@ -62,6 +62,8 @@ def install(app, settings):
         base = (path / "trials" / tid / "workspace" / "materials").resolve()
         candidates = [
             base / (asset["id"] + ".pdf"),
+            # 直接可播的资料没有 preview.mp4，原文件就是 original.<后缀>（可能是 mkv/webm）。
+            *sorted((base / asset["id"]).glob("original.*")),
             base / asset["id"] / "preview.mp4",
             base / asset["id"] / "preview.m4a",
         ]

@@ -15,7 +15,9 @@ ROUTE_LABELS = {
 
 _VISUAL_OR_TIME = re.compile(
     r"(第\s*\d+\s*页|页图|页面|这页|该页|图中|图片|图像|图表|公式|截图|"
-    r"视频|字幕|帧|回放|pdf|\.pdf|mp4|\.mp4|秒)",
+    r"视频|音频|录音|字幕|帧|回放|秒|"
+    # 文件名是用户会真的说出口的线索，别只认 mp4。
+    r"pdf|\.pdf|mp4|\.mp4|mkv|\.mkv|webm|\.webm|mov|\.mov|avi|\.avi|m4a|mp3|wav)",
     re.IGNORECASE,
 )
 _MATERIAL_TERMS = (

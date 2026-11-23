@@ -15,7 +15,39 @@ from pathlib import Path
 
 import httpx
 
-MEDIA_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".mp3", ".m4a", ".wav", ".ogg", ".flac"}
+# 这份清单只用来判断"这是不是一份音视频"，不是准入门槛。真正的准入由 ffprobe
+# 决定（能探出轨道就接收）。以前它被当成白名单用，于是 .avi / .ts / .wmv 的用户
+# 被告知"请先转成 mp4"——把工具的麻烦推给用户，而 ffmpeg 本来就能读这些格式。
+# 现在清单覆盖 ffmpeg 常见的容器与编码，剩下判断交给探测。
+MEDIA_SUFFIXES = {
+    # 视频容器
+    ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".f4v",
+    ".mpg", ".mpeg", ".mts", ".m2ts", ".ts", ".3gp", ".3g2", ".ogv", ".rmvb",
+    ".vob", ".asf", ".divx", ".dv",
+    # 音频容器与编码
+    ".mp3", ".m4a", ".m4b", ".aac", ".wav", ".wave", ".flac", ".ogg", ".oga",
+    ".opus", ".wma", ".aiff", ".aif", ".ac3", ".amr", ".ape", ".wv", ".mka",
+}  # fmt: skip
+# 字幕同理：官方渠道给的不一定是 SRT/VTT——B 站给 .ass、YouTube 的 ttml/srv3、
+# 有些课程给 .sbv / MicroDVD .sub。让用户自己转格式属于同一类"迁就"。
+SUBTITLE_SUFFIXES = {".srt", ".vtt", ".ass", ".ssa", ".ttml", ".dfxp", ".sbv", ".sub", ".smi"}
+# 这两种本身就是带时间的纯文本，直接解析（保留原始时间戳，不经 ffmpeg 重排）。
+_TEXT_TIMED_SUBTITLES = {".srt", ".vtt"}
+CONTENT_TYPES = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/ogg",
+}
 # 浏览器能不能直接播，取决于"容器 + 编码"，不是扩展名。同一个 mkv 里装 h264+aac，
 # 差的只是一层壳（remux 秒级）；一个 mp4 里装 ProRes，反而播不了（必须重编码）。
 # 早先的判据要求"扩展名 mp4 且 h264 且 yuv420p 且 aac"，于是 720p 的 AV1 mp4、
@@ -75,11 +107,12 @@ def command(args, timeout=180):
         raise MediaError("媒体解码失败或超时，请确认文件完整且编码受支持") from None
 
 
-def playback_plan(suffix, video, audio):
+def playback_plan(suffix, video, audio, oversized=False):
     """能否在浏览器里直接播：direct 直接播 / remux 只换壳 / transcode 重编码。
 
     ``suffix`` 用保存下来的文件扩展名判断容器——ffprobe 会把 mkv 报成
     ``matroska,webm``，只看 format_name 会把 mkv 误判成 webm。
+    ``oversized`` 指超出 4K：这类要缩尺寸，只能重编码，换壳解决不了。
     """
     video_codec = (video or {}).get("codec_name")
     audio_codec = (audio or {}).get("codec_name")
@@ -89,11 +122,18 @@ def playback_plan(suffix, video, audio):
         return "transcode"
     if audio and audio_codec not in DIRECT_AUDIO_CODECS:
         return "transcode"
+    if oversized:
+        return "transcode"
     container = str(suffix).lower().strip()
     # 传进来的可能是 ".mkv" 也可能带文件名（"colors.mkv"）：Path(".mkv").suffix 是空，
     # 点开头的字符串会被当成隐藏文件名，所以直接按最后一个点切。
     container = container[container.rfind(".") + 1 :]
     return "direct" if container in DIRECT_CONTAINERS else "remux"
+
+
+def content_type(path):
+    """按实际文件给 Content-Type，不要假定一切都是 mp4。"""
+    return CONTENT_TYPES.get(Path(str(path)).suffix.lower(), "application/octet-stream")
 
 
 def probe(path, max_seconds=14400):
@@ -128,9 +168,10 @@ def probe(path, max_seconds=14400):
     audio = next((s for s in data["streams"] if s["codec_type"] == "audio"), None)
     if not video and not audio:
         raise MediaError("文件没有可用的音视频轨道")
-    if video and int(video.get("width", 0)) * int(video.get("height", 0)) > 3840 * 2160:
-        raise MediaError("初版支持最高4K视频，请先降低分辨率")
-    playback = playback_plan(Path(path).suffix, video, audio)
+    area = int(video.get("width", 0)) * int(video.get("height", 0)) if video else 0
+    # 超出 4K 不拒绝：prepare 本来就会缩到 1280 宽，要求用户先自己转码属于把工具的
+    # 麻烦推回去。这里只把它降级成 transcode。
+    playback = playback_plan(Path(path).suffix, video, audio, oversized=area > 3840 * 2160)
     return {
         "duration": duration,
         "has_video": bool(video),
@@ -139,6 +180,8 @@ def probe(path, max_seconds=14400):
         "browser_playable": playback == "direct",
         "video_codec": (video or {}).get("codec_name"),
         "audio_codec": (audio or {}).get("codec_name"),
+        "width": int(video.get("width", 0)) if video else 0,
+        "height": int(video.get("height", 0)) if video else 0,
     }
 
 
@@ -218,8 +261,7 @@ def sample_times(start, end, count, *, duration=None):
     if span <= 0:
         return []
     return [
-        round(min(limit - 0.001, start + span * (index + 0.5) / count), 3)
-        for index in range(count)
+        round(min(limit - 0.001, start + span * (index + 0.5) / count), 3) for index in range(count)
     ]
 
 
@@ -270,11 +312,66 @@ def valid_segments(segments, duration, allow_empty=False):
     return sorted(result, key=lambda s: (s["start"], s["end"]))
 
 
-def parse_captions(raw, duration):
-    try:
-        text = raw.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
-    except UnicodeDecodeError:
-        raise MediaError("字幕需要 UTF-8 编码的 SRT 或 WebVTT") from None
+def _subtitle_as_webvtt(raw, suffix):
+    """把非 SRT/VTT 的字幕（或非 UTF-8 编码的字幕）先交给 ffmpeg 转成 VTT。
+
+    官方渠道给的不一定是 SRT/VTT：B 站给 .ass、YouTube 给 .ttml/.srv3、有的课程给
+    .sbv，也有 GBK/UTF-16 编码的 .srt。要求用户自己先转格式，是把工具该做的事
+    推给用户；ffmpeg 本来就能读这些。
+    """
+    with tempfile.TemporaryDirectory(prefix="la-subs-") as directory:
+        source = Path(directory) / ("input" + (suffix or ".srt"))
+        target = Path(directory) / "output.vtt"
+        source.write_bytes(raw)
+        command(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                str(source),
+                "-f",
+                "webvtt",
+                str(target),
+            ]
+        )
+        if not target.exists():
+            raise MediaError("字幕转换失败，请检查文件是否完整")
+        return target.read_text(encoding="utf-8", errors="replace")
+
+
+def _decode_subtitle(raw):
+    """按常见编码依次尝试解码字幕文本。
+
+    字幕来源五花八门：国内课程常给 GBK/GB18030，旧工具导出 UTF-16（带 BOM），
+    也有纯 UTF-8。ffmpeg 的 srt 解复用器对 UTF-16 并不可靠，所以编码这一层自己解，
+    解不出来再退回 ffmpeg 转换。
+    """
+    candidates = ["utf-8-sig"]
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        candidates.append("utf-16")
+    candidates.append("gb18030")
+    for encoding in candidates:
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
+def parse_captions(raw, duration, suffix=".srt"):
+    suffix = (suffix or ".srt").lower()
+    if not suffix.startswith("."):
+        suffix = "." + suffix
+    text = None
+    if suffix in _TEXT_TIMED_SUBTITLES:
+        text = _decode_subtitle(raw)
+    if text is None:
+        # 非 SRT/VTT（ass/ssa/ttml/sbv/sub…）交给 ffmpeg 先转 VTT 再按同一套规则解析。
+        text = _subtitle_as_webvtt(raw, suffix)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     # SRT and WebVTT timestamps, including WebVTT's optional hour component/settings.
     stamp = r"((?:\d+:)?\d{2}:\d{2}[.,]\d{3})"
     pattern = re.compile(
