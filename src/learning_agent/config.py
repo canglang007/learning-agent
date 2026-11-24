@@ -63,24 +63,15 @@ class Settings(BaseSettings):
     """文字层字符数低于该值的页视为无可提取文字，进入 OCR。"""
     retrieval_mode: Literal["lexical_baseline", "bm25", "hybrid"] = "hybrid"
     embedding_provider: Literal["disabled", "ollama", "compatible", "local"] = "ollama"
-    """默认 ``ollama`` + ``bge-m3``：这是本项目一直在用的向量配置。
+    """默认 ``ollama`` + ``bge-m3``：这是本项目一直在用的向量配置，不是可调参数。
 
-    三条路的实测差距（v5，7 讲 942 块、83 道可评分题，同一套混合检索只换模型）：
+    ``local`` 是离线兜底（384 维，跨语言对齐弱；``uv sync --extra embed``，首次下载
+    约 470 MB）；``compatible`` 走 OpenAI 兼容接口；只要关键词检索就设 ``disabled``。
 
-    ======================  =========  ========
-    向量来源                  Hit@5      MRR@5
-    ======================  =========  ========
-    ``local`` MiniLM-L12-v2    0.554      0.394
-    ``ollama`` bge-m3          0.639      0.464
-    ======================  =========  ========
-
-    差 8.5 个点主要来自跨语言术语对齐：中文问「剪枝」要能命中英文 "pruning"，
-    384 维小模型这条链路补不上。**ollama 没启动时不要换模型**，启动它；
-    换模型会把评测口径一起换掉，数字与之前不可比。索引会在 ``dense_status``
-    里如实说明为什么退回 BM25。
-
-    ``local`` 是离线兜底（``uv sync --extra embed``，首次下载约 470 MB），
-    指标明显更低；``compatible`` 走 OpenAI 兼容接口；只要关键词检索就设 ``disabled``。
+    **ollama 没启动时不要改用 ``local``。** 那是换掉产品在用的组件，评测口径会跟着变，
+    数字与之前不可比；正确做法是 ``ollama serve``。换组件属于"必须先问"的改动，
+    理由见 ``docs/evaluation-integrity.md``。索引会在 ``dense_status`` 里如实说明
+    为什么退回 BM25。
     """
     embedding_base_url: str = "http://localhost:11434"
     embedding_model: str = "bge-m3"
