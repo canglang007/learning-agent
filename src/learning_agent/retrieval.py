@@ -87,22 +87,81 @@ def fuse(*rankings, k=60):
     return sorted(scores, key=lambda i: (-scores[i], i)), scores
 
 
+_CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_LECTURE_NAME_RE = re.compile(
+    r"(?:lecture|lec)[\s_-]*0*(\d+)(?!\d)|第\s*([0-9]+|[一二三四五六七八九十]+)\s*[讲课]",
+    re.IGNORECASE,
+)
+_LECTURE_QUERY_RE = re.compile(
+    r"(?:第\s*([0-9]+|[一二三四五六七八九十]+)\s*[讲课]|(?:lecture|lec)\s*#?\s*0*(\d+)(?!\d))",
+    re.IGNORECASE,
+)
+
+
+def _parse_lecture_number(token):
+    if not token:
+        return None
+    if token.isdigit():
+        return int(token)
+    if token == "十":
+        return 10
+    if "十" in token:
+        left, _, right = token.partition("十")
+        tens = _CN_DIGITS.get(left, 1) if left else 1
+        ones = _CN_DIGITS.get(right, 0) if right else 0
+        return tens * 10 + ones
+    if len(token) == 1 and token in _CN_DIGITS:
+        return _CN_DIGITS[token]
+    return None
+
+
+def _lecture_numbers_in_name(name):
+    nums = set()
+    for m in _LECTURE_NAME_RE.finditer(name):
+        num = _parse_lecture_number(m.group(1) or m.group(2))
+        if num is not None:
+            nums.add(num)
+    return nums
+
+
 def course_scope(query, chunks):
-    """Match explicit course identifiers to filenames, not to the lecture cover text."""
-    identifiers = course_codes(c["name"] for c in chunks) & set(tokenize(query))
-    if not identifiers:
-        return chunks, query, []
-    selected = [
-        c for c in chunks if identifiers.intersection(re.split(r"[^a-z0-9]+", c["name"].casefold()))
-    ]
+    """Match explicit course identifiers and lecture numbers to filenames, not cover text."""
+    selected = chunks
     cleaned = query
-    for identifier in identifiers:
-        cleaned = re.sub(
-            r"(?<![a-z0-9])" + re.escape(identifier) + r"(?![a-z0-9])",
-            " ",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
+    scoped = False
+
+    identifiers = course_codes(c["name"] for c in chunks) & set(tokenize(query))
+    if identifiers:
+        selected = [
+            c
+            for c in selected
+            if identifiers.intersection(re.split(r"[^a-z0-9]+", c["name"].casefold()))
+        ]
+        for identifier in identifiers:
+            cleaned = re.sub(
+                r"(?<![a-z0-9])" + re.escape(identifier) + r"(?![a-z0-9])",
+                " ",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+        scoped = True
+
+    query_lectures = set()
+    for m in _LECTURE_QUERY_RE.finditer(cleaned):
+        num = _parse_lecture_number(m.group(1) or m.group(2))
+        if num is not None:
+            query_lectures.add(num)
+    if query_lectures:
+        matched = [
+            c for c in selected if query_lectures.intersection(_lecture_numbers_in_name(c["name"]))
+        ]
+        if matched:
+            selected = matched
+            cleaned = _LECTURE_QUERY_RE.sub(" ", cleaned)
+            scoped = True
+
+    if not scoped:
+        return chunks, query, []
     return selected, cleaned.strip() or query, sorted({c["id"] for c in selected})
 
 

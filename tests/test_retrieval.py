@@ -207,6 +207,20 @@ def test_explicit_course_identifier_scopes_documents_without_title_boost():
     # A course-directory query remains searchable instead of becoming an empty vector input.
     assert course_scope("CS336", chunks)[1] == "CS336"
 
+    # 通用讲次作用域匹配：中文/阿拉伯数字讲次自动匹配文件名中的 lectureN，无匹配时不过滤。
+    lecture_chunks = [
+        {"id": "l4", "name": "cs336-lecture4.mp4", "excerpt": "MoE"},
+        {"id": "l10", "name": "cs336-lecture10.mp4", "excerpt": "KV cache"},
+        {"id": "hy", "name": "hungyi-kv-cache.mp4", "excerpt": "KV cache"},
+    ]
+    selected, query, ids = course_scope("第十讲列了哪几类把 KV cache 变小的办法？", lecture_chunks)
+    assert ids == ["l10"] and "第十讲" not in query
+    selected, query, ids = course_scope("lecture 4 讲了什么", lecture_chunks)
+    assert ids == ["l4"] and "lecture" not in query.casefold()
+    # 文件名里没有对应讲次时保持全集，避免误过滤。
+    selected, query, ids = course_scope("第九十九讲讲了什么", lecture_chunks)
+    assert selected == lecture_chunks and ids == []
+
 
 class FakeReranker:
     """假交叉编码器：按关键词给分，验证重排只动顺序、失败如实降级。"""

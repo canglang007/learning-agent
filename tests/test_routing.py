@@ -239,3 +239,117 @@ def test_auto_route_keeps_agent_for_visual_reference(tmp_path):
         event["type"] == "route.selected" and event["payload"]["route"] == "agent"
         for event in events
     )
+
+
+def test_auto_route_cross_material_agent_multi_step_search(tmp_path):
+    """跨材料对比问题走完整 Agent，支持拆分子查询并按 material_id 分别检索两份资料。"""
+    import json
+
+    close_for(tmp_path)
+
+    class CrossMaterialAgent:
+        def __init__(self):
+            self.step_count = 0
+            self.material_ids = []
+            self.search_hits = []
+
+        async def step(self, history, instructions, tools, allow_tools):
+            self.step_count += 1
+            if self.step_count == 1:
+                return (
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_list",
+                                "type": "function",
+                                "function": {"name": "list_materials", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    {"total_tokens": 10},
+                )
+            if self.step_count == 2:
+                listed = json.loads(history[-1]["content"])
+                by_name = {m["name"]: m["id"] for m in listed["materials"]}
+                self.material_ids = [by_name["cs336-lecture9.md"], by_name["cs336-lecture10.md"]]
+                return (
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_s1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_materials",
+                                    "arguments": json.dumps(
+                                        {"query": "训练算力分配", "material_id": self.material_ids[0]}
+                                    ),
+                                },
+                            },
+                            {
+                                "id": "call_s2",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_materials",
+                                    "arguments": json.dumps(
+                                        {"query": "推理显存带宽", "material_id": self.material_ids[1]}
+                                    ),
+                                },
+                            },
+                        ],
+                    },
+                    {"total_tokens": 12},
+                )
+            for msg in history[-2:]:
+                if msg.get("role") == "tool":
+                    self.search_hits.append(json.loads(msg["content"]))
+            return (
+                {
+                    "role": "assistant",
+                    "content": "第9讲关注训练算力分配 [cs336-lecture9.md:L1-L1]，第10讲关注推理显存带宽 [cs336-lecture10.md:L1-L1]。",
+                },
+                {"total_tokens": 15},
+            )
+
+    model = CrossMaterialAgent()
+    client = TestClient(
+        create_app(Settings(_env_file=None, data_root=tmp_path, route_policy="auto"), model)
+    )
+    space = client.post("/api/spaces", json={"content": "跨讲学习"}).json()
+    client.post(
+        f"/api/spaces/{space['id']}/materials",
+        files={
+            "file": (
+                "cs336-lecture9.md",
+                "第九讲讨论缩放定律与训练算力分配，不考虑推理显存带宽。".encode(),
+                "text/markdown",
+            )
+        },
+    )
+    client.post(
+        f"/api/spaces/{space['id']}/materials",
+        files={
+            "file": (
+                "cs336-lecture10.md",
+                "第十讲讨论推理服务成本，核心瓶颈是解码阶段的推理显存带宽。".encode(),
+                "text/markdown",
+            )
+        },
+    )
+    conversation = client.post(f"/api/spaces/{space['id']}/conversations").json()
+    result = ask(client, conversation["id"], "对比 CS336 第 9 讲和第 10 讲对成本瓶颈的分析")
+
+    assert result["state"] == "completed"
+    events = route_events(client, result["run_id"])
+    assert any(
+        event["type"] == "route.selected"
+        and event["payload"]["route"] == "agent"
+        and event["payload"]["reason"] == "cross_material_comparison"
+        for event in events
+    )
+    assert len(model.search_hits) == 2
+    assert model.search_hits[0]["hits"][0]["id"] == model.material_ids[0]
+    assert model.search_hits[1]["hits"][0]["id"] == model.material_ids[1]
