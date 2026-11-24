@@ -99,6 +99,15 @@ def test_course_codes_come_from_material_names():
         "fixed_rag",
         "material_reference",
     )
+    # 跨材料/跨讲对比问题不能降级到单次 fixed_rag，必须走完整 Agent 分步检索。
+    assert choose_route(
+        "对比 CS336 第 9 讲和第 10 讲对推理服务成本的分析", material_names=names
+    ) == ("agent", "cross_material_comparison")
+    assert choose_route(
+        "这两份资料里分别怎么减少 KV cache 开销？", material_names=names
+    ) == ("agent", "cross_material_comparison")
+    # 不涉及资料/课程的纯通用对比问题仍走 direct。
+    assert choose_route("用简短例子对比近似和严格相等。") == ("direct", "general_question")
 
 
 def test_instructions_require_material_id_lookup_before_reading():

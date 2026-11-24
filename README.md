@@ -13,7 +13,7 @@ Learning Agent 面向在长课程、讲义和个人资料里自学的场景。�
 - **可选自动路由**：简单问题走直答或固定检索，涉及页面、图表、视频、反馈或选中位置时回到完整 Agent，保留同一套 Runtime 与记录。
 - **连续学习**：保存当前目标、卡点、讲解尝试和用户反馈；支持主题接续与可管理的跨会话记忆。
 - **可恢复执行**：问题提交后后台执行，网页显示真实进度；刷新、断线或进程重启后按检查点恢复，可取消，可查看草稿。
-- **本地检索**：中文二元词与英文词 BM25，叠加多语言向量（默认走本机 ollama 的 `bge-m3`，可切进程内 ONNX 或 OpenAI 兼容接口），RRF 融合，交叉编码器精排（默认开启）；向量或精排不可用时明确退回上一级并说明原因。92 题标注集（7 讲整讲 8.8 小时 + 三份讲义，942 个分块、83 道可评分）上 Hit@5：BM25 0.40 → 混合 **0.64** → **加精排 0.81**（向量 `bge-m3`、精排 `bge-reranker-v2-m3-int8`）。换模型差别很大——进程内 ONNX 回退用的 384 维小模型，混合只有 0.55，所以报数字必须带模型名。精排不能替代向量召回：只给 BM25 候选加精排是 0.55。历史口径见[检索口径沿革](docs/retrieval-history.md)。
+- **本地检索**：中文二元词与英文词 BM25，叠加多语言向量（默认走本机 ollama 的 `bge-m3`，可切进程内 ONNX 或 OpenAI 兼容接口），RRF 融合，交叉编码器精排（默认开启）；向量或精排不可用时明确退回上一级并说明原因。92 题标注集（7 讲整讲 8.8 小时 + 三份讲义，942 个分块、83 道可评分）上 Hit@5：BM25 0.40 → 混合 **0.64** → **加精排 0.81**（向量 `bge-m3`、精排 `bge-reranker-v2-m3-int8`）。精排不能替代向量召回：只给 BM25 候选加精排是 0.55。历史口径见[检索口径沿革](docs/retrieval-history.md)。
 - **可评测**：固定 Dataset、逐尝试证据、规则/人工复核、baseline/candidate 对比、只读评测页，以及冻结基线与退化门禁。
 
 ## 界面
@@ -153,7 +153,7 @@ docker compose up --build
 # A. 用宿主机的 ollama（macOS / Windows 的 Docker Desktop 可直接用这个主机名）
 LA_EMBEDDING_BASE_URL=http://host.docker.internal:11434
 
-# B. 不装 ollama：改用镜像内的 ONNX 模型（已带 embed 扩展；回退口径混合 0.55，比 bge-m3 低 8.5pt）
+# B. 不装 ollama：改用镜像内的 ONNX 模型（已带 embed 扩展，适合无 ollama 环境回退）
 LA_EMBEDDING_PROVIDER=local
 LA_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```

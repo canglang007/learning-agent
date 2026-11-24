@@ -118,9 +118,9 @@ def main():
     parser.add_argument("--model", default=None, help="embedding 模型；缺省用配置默认值")
     parser.add_argument(
         "--provider",
-        default="local",
+        default=None,
         choices=["local", "ollama", "compatible"],
-        help="向量来源：local=进程内 fastembed，ollama=本机 ollama，compatible=OpenAI 兼容接口",
+        help="向量来源：缺省用配置默认值；local=进程内 fastembed，ollama=本机 ollama，compatible=OpenAI 兼容接口",
     )
     parser.add_argument(
         "--base-url",
@@ -169,13 +169,13 @@ def main():
         _env_file=None,
         data_root=work,
         retrieval_mode="hybrid",
-        embedding_provider=args.provider,
         embedding_base_url=args.base_url,
         embedding_cache_dir=args.model_cache,
         # 传了 --rerank-model 这一档就是"混合+精排"；档位名会带上 +rerank，
         # 免得和纯混合的 0.64 混着比。要在两档之间做选择，用 --rerank-model 留空
         # 跑一次即可（BM25 基线那一档始终不带精排）。
         rerank_model=args.rerank_model,
+        **({"embedding_provider": args.provider} if args.provider else {}),
         **({"embedding_model": args.model} if args.model else {}),
         **({"rerank_candidates": args.rerank_candidates} if args.rerank_candidates else {}),
     )

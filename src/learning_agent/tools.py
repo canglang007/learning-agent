@@ -83,7 +83,7 @@ ARGUMENTS = {
 }
 DESCRIPTIONS = {
     "list_materials": "查看当前空间的资料目录，包含格式与PDF物理页数；pages_without_text为文字层为空、尚未识别的扫描页数。",
-    "search_materials": "搜索资料段落：BM25与已就绪的多语言向量按RRF融合；不可用时明确降级。material_id=null搜索全空间，或指定资料缩小范围。结果包含chunk_id和原始页码/时间；无结果可改写查询或查目录。",
+    "search_materials": "搜索资料段落：BM25与已就绪的多语言向量按RRF融合并精排；不可用时明确降级。material_id=null搜索全空间，或指定资料缩小范围；跨材料对比/综合问题应拆成子查询并分别指定material_id多次调用。结果包含chunk_id和原始页码/时间；无结果可改写查询或查目录。",
     "material_outline": "分页查看指定资料的导航。PDF按物理页首行、音视频按5分钟时间分组、文字按段落；不是语义章节识别。start为从0开始的目录偏移，limit最多30；next_start可继续翻页。",
     "read_context": "按搜索/目录返回的chunk_id读取原段及前后最多各2段。用于补充定义、条件、推导上下文，再决定是否读整页、查看图像或检查视频。字幕更新后旧chunk_id会失效，应重新搜索。",
     "read_passage": "读取资料原文与行号。范围最多50行；获取推导条件、定义或前后文。",

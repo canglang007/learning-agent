@@ -61,6 +61,12 @@ def mentions_course_code(text: str, codes) -> bool:
     )
 
 
+# 跨材料/跨讲对比或综合多份资料时，单次固定检索无法凑齐多份证据，必须走完整 Agent 分步检索。
+_CROSS_MATERIAL = re.compile(
+    r"(对比|比较|异同|分别|各自|结合两|两讲|多讲|跨讲|两份|多份|不同讲|综合.*资料|综合.*讲)"
+)
+
+
 def choose_route(
     question: str,
     *,
@@ -89,9 +95,13 @@ def choose_route(
     text = question.casefold()
     if _VISUAL_OR_TIME.search(text):
         return "agent", "explicit_visual_or_time"
-    if material_names and mentions_course_code(text, course_codes(material_names)):
+    has_course_code = bool(material_names and mentions_course_code(text, course_codes(material_names)))
+    has_material_term = any(term in text for term in _MATERIAL_TERMS)
+    if (has_course_code or has_material_term) and _CROSS_MATERIAL.search(text):
+        return "agent", "cross_material_comparison"
+    if has_course_code:
         return "fixed_rag", "course_code_reference"
-    if any(term in text for term in _MATERIAL_TERMS):
+    if has_material_term:
         return "fixed_rag", "material_reference"
     return "direct", "general_question"
 
